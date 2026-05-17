@@ -43,6 +43,24 @@ docker compose up -d
 - API 地址：`http://localhost:3000/v1`
 - 数据目录：`./data`
 
+### Windows 绿色版
+
+不想安装 Docker、Python、Node 的用户，可以使用 Windows 绿色包。
+
+绿色包的目标体验是：
+
+```text
+解压 -> 双击 start.bat -> 打开 http://localhost:3000
+```
+
+Cherry Studio / OpenAI 兼容接口填写：
+
+```text
+http://localhost:3000/v1
+```
+
+绿色包制作说明见 [WINDOWS_PORTABLE.md](WINDOWS_PORTABLE.md)。
+
 ### 本地开发
 
 启动后端：
