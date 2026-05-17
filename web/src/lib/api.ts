@@ -53,6 +53,7 @@ export type SettingsConfig = {
   proxy: string;
   base_url?: string;
   global_system_prompt?: string;
+  reverse_prompt_instruction?: string;
   sensitive_words?: string[];
   ai_review?: {
     enabled?: boolean;
@@ -65,6 +66,7 @@ export type SettingsConfig = {
   image_retention_days?: number | string;
   image_poll_timeout_secs?: number | string;
   image_account_concurrency?: number | string;
+  image_empty_result_retry_enabled?: boolean;
   auto_remove_invalid_accounts?: boolean;
   auto_remove_rate_limited_accounts?: boolean;
   log_levels?: string[];
@@ -164,11 +166,12 @@ export type SystemLog = {
 export type ImageResponse = {
   created: number;
   data: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
+  message?: string;
 };
 
 export type ImageTask = {
   id: string;
-  status: "queued" | "running" | "success" | "error";
+  status: "queued" | "running" | "success" | "error" | "cancelled";
   mode: "generate" | "edit";
   model?: ImageModel;
   size?: string;
@@ -178,9 +181,18 @@ export type ImageTask = {
   error?: string;
 };
 
+export type ImagePromptSource = string | { url?: string; data?: string; base64?: string; mime?: string; filename?: string };
+
+export const DEFAULT_REVERSE_PROMPT_INSTRUCTION =
+  "请根据这张图片反推出可用于 AI 画图的中文提示词。只输出一段可直接用于生图的提示词，尽量包含主体、构图、风格、光线、色彩、细节、镜头与氛围；不要解释过程，不要加入无关说明。";
+
 type ImageTaskListResponse = {
   items: ImageTask[];
   missing_ids: string[];
+};
+
+type ImageTaskCancelResponse = ImageTaskListResponse & {
+  cancelled_ids: string[];
 };
 
 export type LoginResponse = {
@@ -373,12 +385,89 @@ export async function createImageEditTask(
   });
 }
 
+export async function createImageEditTaskFromSource(
+  clientTaskId: string,
+  image: ImagePromptSource,
+  prompt: string,
+  model?: ImageModel,
+  size?: string,
+) {
+  return httpRequest<ImageTask>("/api/image-tasks/edits", {
+    method: "POST",
+    body: {
+      client_task_id: clientTaskId,
+      image,
+      prompt,
+      ...(model ? { model } : {}),
+      ...(size ? { size } : {}),
+    },
+  });
+}
+
+export async function createImageEditTaskFromSources(
+  clientTaskId: string,
+  images: ImagePromptSource[],
+  prompt: string,
+  model?: ImageModel,
+  size?: string,
+) {
+  return httpRequest<ImageTask>("/api/image-tasks/edits", {
+    method: "POST",
+    body: {
+      client_task_id: clientTaskId,
+      images,
+      prompt,
+      ...(model ? { model } : {}),
+      ...(size ? { size } : {}),
+    },
+  });
+}
+
+export async function reverseImagePrompt(image: ImagePromptSource, instruction?: string, model?: string, signal?: AbortSignal) {
+  const prompt = instruction?.trim() || DEFAULT_REVERSE_PROMPT_INSTRUCTION;
+  const result = await httpRequest<ImageResponse>("/v1/images/edits", {
+    method: "POST",
+    signal,
+    body: {
+      image,
+      prompt,
+      model: model || "gpt-image-2",
+      n: 1,
+      response_format: "url",
+      message_as_error: false,
+    },
+  });
+  const reversedPrompt = result.message?.trim() || result.data[0]?.revised_prompt?.trim() || "";
+  if (!reversedPrompt) {
+    throw new Error("未能从图片反推出提示词");
+  }
+  return { prompt: reversedPrompt, model: model || "gpt-image-2" };
+}
+
+export async function fetchReversePromptInstruction() {
+  return httpRequest<{ instruction: string }>("/api/reverse-prompt-instruction");
+}
+
+export async function updateReversePromptInstruction(instruction: string) {
+  return httpRequest<{ instruction: string; config: SettingsConfig }>("/api/reverse-prompt-instruction", {
+    method: "POST",
+    body: { instruction },
+  });
+}
+
 export async function fetchImageTasks(ids: string[]) {
   const params = new URLSearchParams();
   if (ids.length > 0) {
     params.set("ids", ids.join(","));
   }
   return httpRequest<ImageTaskListResponse>(`/api/image-tasks${params.toString() ? `?${params.toString()}` : ""}`);
+}
+
+export async function cancelImageTasks(ids: string[]) {
+  return httpRequest<ImageTaskCancelResponse>("/api/image-tasks/cancel", {
+    method: "POST",
+    body: { ids },
+  });
 }
 
 export async function fetchSettingsConfig() {

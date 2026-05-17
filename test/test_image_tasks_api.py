@@ -16,6 +16,7 @@ class FakeImageTaskService:
     def __init__(self):
         self.generation_calls = []
         self.edit_calls = []
+        self.cancel_calls = []
 
     def submit_generation(self, identity, **kwargs):
         self.generation_calls.append((identity, kwargs))
@@ -52,6 +53,25 @@ class FakeImageTaskService:
                 for task_id in ids
                 if task_id != "missing"
             ],
+            "missing_ids": [task_id for task_id in ids if task_id == "missing"],
+        }
+
+    def cancel_tasks(self, identity, ids):
+        self.cancel_calls.append((identity, ids))
+        return {
+            "items": [
+                {
+                    "id": task_id,
+                    "status": "cancelled",
+                    "mode": "generate",
+                    "created_at": "2026-01-01 00:00:00",
+                    "updated_at": "2026-01-01 00:00:01",
+                    "error": "任务已取消",
+                }
+                for task_id in ids
+                if task_id != "missing"
+            ],
+            "cancelled_ids": [task_id for task_id in ids if task_id != "missing"],
             "missing_ids": [task_id for task_id in ids if task_id == "missing"],
         }
 
@@ -96,6 +116,49 @@ class ImageTasksApiTests(unittest.TestCase):
         images = self.fake_service.edit_calls[0][1]["images"]
         self.assertEqual(len(images), 2)
 
+    def test_create_edit_task_accepts_json_image_source(self):
+        response = self.client.post(
+            "/api/image-tasks/edits",
+            headers=AUTH_HEADERS,
+            json={
+                "client_task_id": "edit-json",
+                "prompt": "edit",
+                "model": "gpt-image-2",
+                "image": "data:image/png;base64,b25l",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["id"], "edit-json")
+        images = self.fake_service.edit_calls[0][1]["images"]
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0][0], b"one")
+        self.assertEqual(images[0][2], "image/png")
+
+    def test_create_edit_task_accepts_json_image_sources(self):
+        response = self.client.post(
+            "/api/image-tasks/edits",
+            headers=AUTH_HEADERS,
+            json={
+                "client_task_id": "edit-json-list",
+                "prompt": "edit",
+                "model": "gpt-image-2",
+                "images": [
+                    {"data": "data:image/png;base64,b25l", "filename": "one.png"},
+                    {"data": "data:image/png;base64,dHdv", "filename": "two.png"},
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["id"], "edit-json-list")
+        images = self.fake_service.edit_calls[0][1]["images"]
+        self.assertEqual(len(images), 2)
+        self.assertEqual(images[0][0], b"one")
+        self.assertEqual(images[0][1], "one.png")
+        self.assertEqual(images[1][0], b"two")
+        self.assertEqual(images[1][1], "two.png")
+
     def test_list_tasks_reports_missing_ids(self):
         response = self.client.get("/api/image-tasks?ids=task-1,missing", headers=AUTH_HEADERS)
 
@@ -103,6 +166,20 @@ class ImageTasksApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual([item["id"] for item in payload["items"]], ["task-1"])
         self.assertEqual(payload["missing_ids"], ["missing"])
+
+    def test_cancel_tasks(self):
+        response = self.client.post(
+            "/api/image-tasks/cancel",
+            headers=AUTH_HEADERS,
+            json={"ids": ["task-1", "missing"]},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["cancelled_ids"], ["task-1"])
+        self.assertEqual(payload["missing_ids"], ["missing"])
+        self.assertEqual(payload["items"][0]["status"], "cancelled")
+        self.assertEqual(self.fake_service.cancel_calls[0][1], ["task-1", "missing"])
 
 
 if __name__ == "__main__":

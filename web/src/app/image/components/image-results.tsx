@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Clock3, Download, LoaderCircle, RotateCcw, Sparkles, Trash2 } from "lucide-react";
+import { Clock3, Download, LoaderCircle, RotateCcw, Sparkles, Trash2, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -22,7 +22,10 @@ type ImageResultsProps = {
   onDeleteResults: (conversationId: string, turnId: string) => void;
   onReuseTurnConfig: (conversationId: string, turnId: string) => void | Promise<void>;
   onRegenerateTurn: (conversationId: string, turnId: string) => void | Promise<void>;
+  onRetryFailedImages: (conversationId: string, turnId: string) => void | Promise<void>;
   onRetryImage: (conversationId: string, turnId: string, imageId: string) => void | Promise<void>;
+  onCancelTurn: (conversationId: string, turnId: string) => void | Promise<void>;
+  onClearFailedRecords: (conversationId: string) => void | Promise<void>;
   formatConversationTime: (value: string) => string;
 };
 
@@ -33,7 +36,7 @@ function getStoredImageSrc(image: StoredImage) {
   return image.url || "";
 }
 
-async function downloadStoredImage(image: StoredImage, index: number) {
+async function downloadStoredImage(image: StoredImage, index: number, fileName?: string) {
   let blob: Blob;
   if (image.b64_json) {
     const binary = atob(image.b64_json);
@@ -49,11 +52,51 @@ async function downloadStoredImage(image: StoredImage, index: number) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `image-${index + 1}.png`;
+  a.download = fileName || `image-${index + 1}.png`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+async function downloadTurnImages(images: StoredImage[], turnIndex: number) {
+  const downloadableImages = images.filter((image) => image.status === "success" && getStoredImageSrc(image));
+
+  for (let index = 0; index < downloadableImages.length; index += 1) {
+    await downloadStoredImage(downloadableImages[index], index, `turn-${turnIndex + 1}-image-${index + 1}.png`);
+    await new Promise((resolve) => window.setTimeout(resolve, 160));
+  }
+}
+
+function formatImageError(message?: string) {
+  const text = String(message || "").trim();
+  const lowerText = text.toLowerCase();
+
+  if (!text) {
+    return "生成失败";
+  }
+  if (text === "任务已取消") {
+    return text;
+  }
+  if (lowerText.includes("no available image quota")) {
+    return "暂无可用绘图额度，请刷新号池或切换账号后重试。";
+  }
+  if (lowerText.includes("image task returned no image data") || text.includes("未返回图片数据")) {
+    return "上游没有返回图片数据，请稍后重试。";
+  }
+  if (lowerText.includes("upstream image connection failed")) {
+    return "上游图片连接失败，请稍后重试。";
+  }
+  if (lowerText.includes("image generation was rejected") || lowerText.includes("content_policy_violation")) {
+    return "图片请求被上游安全策略拒绝，请调整提示词后重试。";
+  }
+  if (lowerText.includes("image task failed")) {
+    return "图片任务执行失败，请稍后重试。";
+  }
+  if (text.includes("服务已重启") || text.includes("已中断")) {
+    return "服务重启导致任务中断，请重新生成。";
+  }
+  return text;
 }
 
 export function ImageResults({
@@ -64,7 +107,10 @@ export function ImageResults({
   onDeleteResults,
   onReuseTurnConfig,
   onRegenerateTurn,
+  onRetryFailedImages,
   onRetryImage,
+  onCancelTurn,
+  onClearFailedRecords,
   formatConversationTime,
 }: ImageResultsProps) {
   const [imageDimensions, setImageDimensions] = useState<Record<string, string>>({});
@@ -104,9 +150,27 @@ export function ImageResults({
     );
   }
 
+  const failedImageCount = selectedConversation.turns.reduce(
+    (sum, turn) => sum + (turn.resultsDeleted ? 0 : turn.images.filter((image) => image.status === "error").length),
+    0,
+  );
+
   return (
     <div className="mx-auto flex w-full max-w-[980px] flex-col gap-5 sm:gap-8">
+      {failedImageCount > 0 ? (
+        <div className="sticky top-0 z-10 flex justify-end">
+          <button
+            type="button"
+            onClick={() => void onClearFailedRecords(selectedConversation.id)}
+            className="inline-flex items-center gap-1.5 rounded-full border border-rose-100 bg-white/95 px-3 py-1.5 text-xs font-medium text-rose-600 shadow-sm backdrop-blur transition hover:bg-rose-50"
+          >
+            <Trash2 className="size-3.5" />
+            清理失败记录 ({failedImageCount})
+          </button>
+        </div>
+      ) : null}
       {selectedConversation.turns.map((turn, turnIndex) => {
+        const turnFailedCount = turn.resultsDeleted ? 0 : turn.images.filter((image) => image.status === "error").length;
         const referenceLightboxImages = turn.referenceImages.map((image, index) => ({
           id: `${turn.id}-reference-${index}`,
           src: image.dataUrl,
@@ -126,7 +190,11 @@ export function ImageResults({
         });
 
         return (
-          <div key={turn.id} className="flex flex-col gap-3 sm:gap-4">
+          <div
+            key={turn.id}
+            data-image-turn-id={turn.id}
+            className="scroll-mt-4 flex flex-col gap-3 sm:scroll-mt-6 sm:gap-4"
+          >
             {!turn.promptDeleted ? (
               <div className="flex justify-end">
                 <div className="max-w-[90%] px-1 py-1 text-[14px] leading-6 text-stone-900 sm:max-w-[82%] sm:text-[15px] sm:leading-7">
@@ -201,6 +269,16 @@ export function ImageResults({
                     <span className="rounded-full bg-stone-100 px-3 py-1">{getTurnStatusLabel(turn.status)}</span>
                     {turn.status === "queued" ? (
                       <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">等待当前对话中的前序任务完成</span>
+                    ) : null}
+                    {turn.status === "queued" || turn.status === "generating" ? (
+                      <button
+                        type="button"
+                        onClick={() => void onCancelTurn(selectedConversation.id, turn.id)}
+                        className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-3 py-1 font-medium text-rose-600 transition hover:bg-rose-100"
+                      >
+                        <XCircle className="size-3.5" />
+                        取消任务
+                      </button>
                     ) : null}
                   </div>
 
@@ -284,7 +362,7 @@ export function ImageResults({
                             )}
                           >
                             <div className="flex h-full min-h-16 flex-col items-center justify-center gap-1.5 px-2 py-2 text-center text-[11px] leading-4 text-rose-600 sm:gap-3 sm:px-6 sm:py-8 sm:text-sm sm:leading-6">
-                              <span className="line-clamp-2 sm:line-clamp-none">{image.error || "生成失败"}</span>
+                              <span className="line-clamp-2 sm:line-clamp-none">{formatImageError(image.error)}</span>
                               <button
                                 type="button"
                                 onClick={() => void onRetryImage(selectedConversation.id, turn.id, image.id)}
@@ -327,11 +405,21 @@ export function ImageResults({
 
                   {turn.status === "error" && turn.error ? (
                     <div className="mt-4 border-l-2 border-amber-300 bg-amber-50/70 px-4 py-3 text-sm leading-6 text-amber-700">
-                      {turn.error}
+                      {formatImageError(turn.error)}
                     </div>
                   ) : null}
 
                   <div className="mt-3 flex items-center gap-1.5 text-[11px] sm:mt-4">
+                    {successfulTurnImages.length > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => void downloadTurnImages(turn.images, turnIndex)}
+                        className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-2.5 py-1 font-medium text-stone-500 transition hover:bg-stone-200 hover:text-stone-900"
+                      >
+                        <Download className="size-3" />
+                        下载本轮全部 ({successfulTurnImages.length})
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => void onRegenerateTurn(selectedConversation.id, turn.id)}
@@ -340,6 +428,16 @@ export function ImageResults({
                       <RotateCcw className="size-3" />
                       全部重新生成
                     </button>
+                    {turnFailedCount > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => void onRetryFailedImages(selectedConversation.id, turn.id)}
+                        className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-1 font-medium text-rose-600 transition hover:bg-rose-100"
+                      >
+                        <RotateCcw className="size-3" />
+                        只重试失败 ({turnFailedCount})
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => onDeleteResults(selectedConversation.id, turn.id)}

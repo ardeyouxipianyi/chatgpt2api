@@ -20,6 +20,11 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     size = body.get("size")
     response_format = str(body.get("response_format") or "b64_json")
     base_url = str(body.get("base_url") or "") or None
+    message_as_error = body.get("message_as_error")
+    if message_as_error is None:
+        message_as_error = True
+    elif isinstance(message_as_error, str):
+        message_as_error = message_as_error.strip().lower() not in {"0", "false", "no", "off"}
     encoded_images = encode_images(images)
     if not encoded_images:
         raise ImageGenerationError("image is required")
@@ -31,7 +36,7 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
         response_format=response_format,
         base_url=base_url,
         images=encoded_images,
-        message_as_error=True,
+        message_as_error=bool(message_as_error),
     ))
     if body.get("stream"):
         return stream_image_chunks(outputs)

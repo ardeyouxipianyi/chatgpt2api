@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { toast } from "sonner";
 
 import {
+  DEFAULT_REVERSE_PROMPT_INSTRUCTION,
   createCPAPool,
   deleteBackup,
   deleteCPAPool,
@@ -67,12 +68,14 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     image_retention_days: Number(config.image_retention_days || 30),
     image_poll_timeout_secs: Number(config.image_poll_timeout_secs || 120),
     image_account_concurrency: Number(config.image_account_concurrency || 3),
+    image_empty_result_retry_enabled: Boolean(config.image_empty_result_retry_enabled ?? true),
     auto_remove_invalid_accounts: Boolean(config.auto_remove_invalid_accounts),
     auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
     log_levels: Array.isArray(config.log_levels) ? config.log_levels : [],
     proxy: typeof config.proxy === "string" ? config.proxy : "",
     base_url: typeof config.base_url === "string" ? config.base_url : "",
     global_system_prompt: String(config.global_system_prompt || ""),
+    reverse_prompt_instruction: String(config.reverse_prompt_instruction || DEFAULT_REVERSE_PROMPT_INSTRUCTION),
     sensitive_words: Array.isArray(config.sensitive_words) ? config.sensitive_words : [],
     ai_review: {
       enabled: Boolean(config.ai_review?.enabled),
@@ -173,12 +176,14 @@ type SettingsStore = {
   setImageRetentionDays: (value: string) => void;
   setImagePollTimeoutSecs: (value: string) => void;
   setImageAccountConcurrency: (value: string) => void;
+  setImageEmptyResultRetryEnabled: (value: boolean) => void;
   setAutoRemoveInvalidAccounts: (value: boolean) => void;
   setAutoRemoveRateLimitedAccounts: (value: boolean) => void;
   setLogLevel: (level: string, enabled: boolean) => void;
   setProxy: (value: string) => void;
   setBaseUrl: (value: string) => void;
   setGlobalSystemPrompt: (value: string) => void;
+  setReversePromptInstruction: (value: string) => void;
   setSensitiveWordsText: (value: string) => void;
   setAIReviewField: (key: "enabled" | "base_url" | "api_key" | "model" | "prompt", value: string | boolean) => void;
   setBackupField: (key: keyof BackupSettings, value: string | boolean) => void;
@@ -304,11 +309,13 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         image_retention_days: Math.max(1, Number(config.image_retention_days) || 30),
         image_poll_timeout_secs: Math.max(1, Number(config.image_poll_timeout_secs) || 120),
         image_account_concurrency: Math.max(1, Number(config.image_account_concurrency) || 3),
+        image_empty_result_retry_enabled: Boolean(config.image_empty_result_retry_enabled),
         auto_remove_invalid_accounts: Boolean(config.auto_remove_invalid_accounts),
         auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
         proxy: config.proxy.trim(),
         base_url: String(config.base_url || "").trim(),
         global_system_prompt: String(config.global_system_prompt || "").trim(),
+        reverse_prompt_instruction: String(config.reverse_prompt_instruction || "").trim(),
         sensitive_words: (config.sensitive_words || []).map((item) => String(item).trim()).filter(Boolean),
         ai_review: {
           enabled: Boolean(config.ai_review?.enabled),
@@ -368,6 +375,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     set((state) => state.config ? { config: { ...state.config, image_account_concurrency: value } } : {});
   },
 
+  setImageEmptyResultRetryEnabled: (value) => {
+    set((state) => state.config ? { config: { ...state.config, image_empty_result_retry_enabled: value } } : {});
+  },
+
   setAutoRemoveInvalidAccounts: (value) => {
     set((state) => state.config ? { config: { ...state.config, auto_remove_invalid_accounts: value } } : {});
   },
@@ -416,6 +427,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
   setGlobalSystemPrompt: (value) => {
     set((state) => state.config ? { config: { ...state.config, global_system_prompt: value } } : {});
+  },
+
+  setReversePromptInstruction: (value) => {
+    set((state) => state.config ? { config: { ...state.config, reverse_prompt_instruction: value } } : {});
   },
 
   setSensitiveWordsText: (value) => {

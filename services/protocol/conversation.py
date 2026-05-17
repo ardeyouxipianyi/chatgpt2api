@@ -593,6 +593,7 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
     emitted = False
     last_error = ""
     for index in range(1, request.n + 1):
+        empty_result_retries = 0
         while True:
             try:
                 token = account_service.get_available_access_token()
@@ -621,6 +622,21 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
                     yield output
                 if returned_message or not returned_result:
                     account_service.mark_image_result(token, False)
+                    if (
+                        not returned_message
+                        and not returned_result
+                        and config.image_empty_result_retry_enabled
+                        and empty_result_retries < 1
+                    ):
+                        empty_result_retries += 1
+                        last_error = "image task returned no image data"
+                        logger.warning({
+                            "event": "image_empty_result_retry",
+                            "model": request.model,
+                            "index": index,
+                            "retry": empty_result_retries,
+                        })
+                        continue
                     return
                 account_service.mark_image_result(token, True)
                 break

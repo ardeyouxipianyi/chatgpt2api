@@ -47,7 +47,11 @@ def require_admin(authorization: str | None) -> dict[str, object]:
 
 
 def resolve_image_base_url(request: Request) -> str:
-    return config.base_url or f"{request.url.scheme}://{request.headers.get('host', request.url.netloc)}"
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    forwarded_host = request.headers.get("x-forwarded-host")
+    scheme = str(forwarded_proto or request.url.scheme).split(",", 1)[0].strip() or request.url.scheme
+    host = str(forwarded_host or request.headers.get("host") or request.url.netloc).split(",", 1)[0].strip()
+    return config.base_url or f"{scheme}://{host}"
 
 
 def raise_image_quota_error(exc: Exception) -> None:
@@ -98,16 +102,31 @@ def start_limited_account_watcher(stop_event: Event) -> Thread:
     return thread
 
 
-def resolve_web_asset(requested_path: str) -> Path | None:
+def resolve_web_asset(requested_path: str, *, prefer_rsc: bool = False) -> Path | None:
     if not WEB_DIST_DIR.exists():
         return None
     clean_path = requested_path.strip("/")
     base_dir = WEB_DIST_DIR.resolve()
-    candidates = [base_dir / "index.html"] if not clean_path else [
+    candidates: list[Path] = []
+    if prefer_rsc:
+        if not clean_path:
+            candidates.append(base_dir / "index.txt")
+        else:
+            candidates.extend([
+                base_dir / clean_path / "index.txt",
+                base_dir / f"{clean_path}.txt",
+            ])
+    html_candidates = [base_dir / "index.html"] if not clean_path else [
         base_dir / Path(clean_path),
         base_dir / clean_path / "index.html",
         base_dir / f"{clean_path}.html",
     ]
+    candidates.extend(html_candidates)
+    if clean_path.endswith(".txt"):
+        route_path = clean_path[:-4].strip("/")
+        candidates.append(base_dir / (route_path or "index.txt"))
+        if route_path:
+            candidates.append(base_dir / route_path / "index.txt")
     for candidate in candidates:
         try:
             candidate.resolve().relative_to(base_dir)

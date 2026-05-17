@@ -19,6 +19,8 @@ type ImageLightboxProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onIndexChange: (index: number) => void;
+  closeOnImageClick?: boolean;
+  enableWheelZoom?: boolean;
 };
 
 type ImageTransform = {
@@ -50,17 +52,23 @@ type TouchGesture =
 const minScale = 1;
 const maxScale = 4;
 
+type TouchListLike = {
+  readonly length: number;
+  item(index: number): { clientX: number; clientY: number } | null;
+  [index: number]: { clientX: number; clientY: number };
+};
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function getTouchDistance(touches: TouchList) {
+function getTouchDistance(touches: TouchListLike) {
   const first = touches[0];
   const second = touches[1];
   return Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY);
 }
 
-function getTouchCenter(touches: TouchList) {
+function getTouchCenter(touches: TouchListLike) {
   const first = touches[0];
   const second = touches[1];
   return {
@@ -89,6 +97,8 @@ export function ImageLightbox({
   open,
   onOpenChange,
   onIndexChange,
+  closeOnImageClick = false,
+  enableWheelZoom = false,
 }: ImageLightboxProps) {
   const gestureRef = useRef<TouchGesture | null>(null);
   const lastTapRef = useRef(0);
@@ -191,6 +201,32 @@ export function ImageLightbox({
       currentTransform.scale > minScale ? { scale: 1, x: 0, y: 0 } : { scale: 2.5, x: 0, y: 0 },
     );
   }, []);
+
+  const handleWheel = useCallback(
+    (event: React.WheelEvent<HTMLDivElement>) => {
+      if (!enableWheelZoom) return;
+      event.preventDefault();
+      event.stopPropagation();
+      cancelScheduledTransform();
+
+      const zoomFactor = event.deltaY < 0 ? 1.12 : 0.88;
+      const targetScale = clamp(transform.scale * zoomFactor, minScale, maxScale);
+      const viewportCenterX = window.innerWidth / 2;
+      const viewportCenterY = window.innerHeight / 2;
+      const cursorX = event.clientX - viewportCenterX;
+      const cursorY = event.clientY - viewportCenterY;
+      const ratio = targetScale / transform.scale;
+
+      setTransform(
+        normalizeTransform({
+          scale: targetScale,
+          x: cursorX - (cursorX - transform.x) * ratio,
+          y: cursorY - (cursorY - transform.y) * ratio,
+        }),
+      );
+    },
+    [cancelScheduledTransform, enableWheelZoom, transform],
+  );
 
   const handleTouchStart = useCallback(
     (event: React.TouchEvent<HTMLDivElement>) => {
@@ -388,6 +424,7 @@ export function ImageLightbox({
           <div
             className="flex h-full w-full touch-none items-center justify-center overflow-hidden"
             onClick={() => onOpenChange(false)}
+            onWheel={handleWheel}
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
@@ -399,14 +436,20 @@ export function ImageLightbox({
               className={cn(
                 "max-h-[90vh] max-w-[90vw] rounded-lg object-contain will-change-transform",
                 isGesturing ? "" : "transition-transform duration-150 ease-out",
-                transform.scale > minScale ? "cursor-grab active:cursor-grabbing" : "cursor-zoom-in",
+                closeOnImageClick ? "cursor-pointer" : transform.scale > minScale ? "cursor-grab active:cursor-grabbing" : "cursor-zoom-in",
               )}
               style={{
                 transform: `translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale})`,
               }}
               onClick={(e) => e.stopPropagation()}
+              onPointerUp={(e) => {
+                if (!closeOnImageClick) return;
+                e.stopPropagation();
+                onOpenChange(false);
+              }}
               onDoubleClick={(e) => {
                 e.stopPropagation();
+                if (closeOnImageClick) return;
                 toggleZoom();
               }}
               draggable={false}

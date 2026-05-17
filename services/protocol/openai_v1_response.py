@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import time
 import uuid
 from typing import Any, Iterable, Iterator
@@ -15,7 +14,7 @@ from services.protocol.conversation import (
     stream_text_deltas,
     text_backend,
 )
-from utils.helper import extract_image_from_message_content, extract_response_prompt, has_response_image_generation_tool
+from utils.helper import decode_image_source, extract_image_from_message_content, extract_response_prompt, has_response_image_generation_tool
 
 
 def is_text_response_request(body: dict[str, Any]) -> bool:
@@ -30,11 +29,9 @@ def extract_response_image(input_value: object) -> tuple[bytes, str] | None:
         return None
     for item in reversed(input_value):
         if isinstance(item, dict) and str(item.get("type") or "").strip() == "input_image":
-            image_url = str(item.get("image_url") or "")
-            if image_url.startswith("data:"):
-                header, _, data = image_url.partition(",")
-                mime = header.split(";")[0].removeprefix("data:")
-                return base64.b64decode(data), mime or "image/png"
+            decoded = decode_image_source(item)
+            if decoded:
+                return decoded
         if isinstance(item, dict):
             images = extract_image_from_message_content(item.get("content"))
             if images:

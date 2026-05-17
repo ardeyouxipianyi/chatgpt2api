@@ -24,6 +24,8 @@ type ImageComposerProps = {
   onPickReferenceImage: () => void;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
   onRemoveReferenceImage: (index: number) => void;
+  placeholder?: string;
+  submitAriaLabel?: string;
 };
 
 export function ImageComposer({
@@ -42,6 +44,8 @@ export function ImageComposer({
   onPickReferenceImage,
   onReferenceImageChange,
   onRemoveReferenceImage,
+  placeholder,
+  submitAriaLabel,
 }: ImageComposerProps) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
@@ -54,14 +58,16 @@ export function ImageComposer({
     [referenceImages],
   );
   const imageSizeOptions = [
-    { value: "", label: "未指定" },
-    { value: "1:1", label: "1:1 (正方形)" },
-    { value: "16:9", label: "16:9 (横版)" },
-    { value: "4:3", label: "4:3 (横版)" },
-    { value: "3:4", label: "3:4 (竖版)" },
-    { value: "9:16", label: "9:16 (竖版)" },
+    { value: "", label: "未指定", estimate: "模型自动决定" },
+    { value: "1:1", label: "1:1 (正方形)", estimate: "约 1254 x 1254" },
+    { value: "16:9", label: "16:9 (横版)", estimate: "约 1672 x 941" },
+    { value: "4:3", label: "4:3 (横版)", estimate: "约 1448 x 1086" },
+    { value: "3:4", label: "3:4 (竖版)", estimate: "约 1086 x 1448" },
+    { value: "9:16", label: "9:16 (竖版)", estimate: "约 941 x 1672" },
   ];
-  const imageSizeLabel = imageSizeOptions.find((option) => option.value === imageSize)?.label || "未指定";
+  const activeImageSizeOption = imageSizeOptions.find((option) => option.value === imageSize) || imageSizeOptions[0];
+  const imageSizeLabel = activeImageSizeOption.label;
+  const imageSizeEstimate = activeImageSizeOption.estimate;
 
   useEffect(() => {
     if (!isSizeMenuOpen) {
@@ -157,9 +163,10 @@ export function ImageComposer({
               onChange={(event) => onPromptChange(event.target.value)}
               onPaste={handleTextareaPaste}
               placeholder={
-                referenceImages.length > 0
+                placeholder ||
+                (referenceImages.length > 0
                   ? "描述你希望如何修改参考图"
-                  : "输入你想要生成的画面，也可直接粘贴图片"
+                  : "输入你想要生成的画面，也可直接粘贴图片")
               }
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
@@ -205,26 +212,29 @@ export function ImageComposer({
                       className="h-7 w-[40px] border-0 bg-transparent px-0 text-center text-xs font-medium text-stone-700 shadow-none focus-visible:ring-0 sm:h-8 sm:w-[64px] sm:text-sm"
                     />
                   </div>
-                  <div
-                    className="relative flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-stone-200 bg-white px-2 py-0.5 text-[11px] sm:h-auto sm:gap-2 sm:px-3 sm:py-1 sm:text-[13px]"
-                  >
+                  <div className="relative flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-stone-200 bg-white px-2 py-0.5 text-[11px] sm:h-auto sm:gap-2 sm:px-3 sm:py-1 sm:text-[13px]">
                     <span className="hidden font-medium text-stone-700 sm:inline sm:text-sm">比例</span>
-                    <button
-                      ref={sizeMenuBtnRef}
-                      type="button"
-                      className="flex h-7 w-[78px] items-center justify-between bg-transparent text-left text-xs font-bold text-stone-700 min-[390px]:w-[96px] sm:h-8 sm:w-[132px]"
-                      onClick={() => {
-                        if (!isSizeMenuOpen && sizeMenuBtnRef.current) {
-                          const rect = sizeMenuBtnRef.current.getBoundingClientRect();
-                          const menuWidth = Math.min(186, window.innerWidth - 32);
-                          setSizeMenuPos({ top: rect.top - 8, left: Math.max(16, Math.min(rect.left, window.innerWidth - menuWidth - 16)) });
-                        }
-                        setIsSizeMenuOpen((open) => !open);
-                      }}
-                    >
-                      <span className="truncate">{imageSizeLabel}</span>
-                      <ChevronDown className={cn("size-4 shrink-0 opacity-60 transition", isSizeMenuOpen && "rotate-180")} />
-                    </button>
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <button
+                        ref={sizeMenuBtnRef}
+                        type="button"
+                        className="flex h-7 w-[78px] items-center justify-between bg-transparent text-left text-xs font-bold text-stone-700 min-[390px]:w-[96px] sm:h-8 sm:w-[132px]"
+                        onClick={() => {
+                          if (!isSizeMenuOpen && sizeMenuBtnRef.current) {
+                            const rect = sizeMenuBtnRef.current.getBoundingClientRect();
+                            const menuWidth = Math.min(224, window.innerWidth - 32);
+                            setSizeMenuPos({ top: rect.top - 8, left: Math.max(16, Math.min(rect.left, window.innerWidth - menuWidth - 16)) });
+                          }
+                          setIsSizeMenuOpen((open) => !open);
+                        }}
+                      >
+                        <span className="truncate">{imageSizeLabel}</span>
+                        <ChevronDown className={cn("size-4 shrink-0 opacity-60 transition", isSizeMenuOpen && "rotate-180")} />
+                      </button>
+                      <span className="hidden max-w-[112px] truncate text-[10px] font-medium text-stone-400 min-[430px]:inline sm:max-w-none sm:text-[11px]">
+                        {imageSizeEstimate}
+                      </span>
+                    </div>
                     {isSizeMenuOpen ? (
                       <div
                         ref={sizeMenuRef}
@@ -233,7 +243,7 @@ export function ImageComposer({
                           top: sizeMenuPos.top,
                           left: sizeMenuPos.left,
                           transform: "translateY(-100%)",
-                          width: "min(186px, calc(100vw - 2rem))",
+                          width: "min(224px, calc(100vw - 2rem))",
                         }}
                       >
                         {imageSizeOptions.map((option) => {
@@ -251,7 +261,10 @@ export function ImageComposer({
                                 setIsSizeMenuOpen(false);
                               }}
                             >
-                              <span>{option.label}</span>
+                              <span className="min-w-0">
+                                <span className="block truncate">{option.label}</span>
+                                <span className="block truncate text-xs text-stone-400">{option.estimate}</span>
+                              </span>
                               {active ? <Check className="size-4" /> : null}
                             </button>
                           );
@@ -267,7 +280,7 @@ export function ImageComposer({
                   onClick={() => void onSubmit()}
                   disabled={!prompt.trim()}
                   className="inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-stone-950 text-white transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:bg-stone-300 sm:size-11"
-                  aria-label={referenceImages.length > 0 ? "编辑图片" : "生成图片"}
+                  aria-label={submitAriaLabel || (referenceImages.length > 0 ? "编辑图片" : "生成图片")}
                 >
                   <ArrowUp className="size-3.5 sm:size-4" />
                 </button>

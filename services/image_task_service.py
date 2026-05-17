@@ -17,7 +17,8 @@ TASK_STATUS_QUEUED = "queued"
 TASK_STATUS_RUNNING = "running"
 TASK_STATUS_SUCCESS = "success"
 TASK_STATUS_ERROR = "error"
-TERMINAL_STATUSES = {TASK_STATUS_SUCCESS, TASK_STATUS_ERROR}
+TASK_STATUS_CANCELLED = "cancelled"
+TERMINAL_STATUSES = {TASK_STATUS_SUCCESS, TASK_STATUS_ERROR, TASK_STATUS_CANCELLED}
 UNFINISHED_STATUSES = {TASK_STATUS_QUEUED, TASK_STATUS_RUNNING}
 
 
@@ -167,6 +168,31 @@ class ImageTaskService:
                 missing_ids = []
             return {"items": items, "missing_ids": missing_ids}
 
+    def cancel_tasks(self, identity: dict[str, object], task_ids: list[str]) -> dict[str, Any]:
+        owner = _owner_id(identity)
+        requested_ids = [_clean(task_id) for task_id in task_ids if _clean(task_id)]
+        cancelled = []
+        unchanged = []
+        missing_ids = []
+        now = _now_iso()
+        with self._lock:
+            for task_id in requested_ids:
+                task = self._tasks.get(_task_key(owner, task_id))
+                if task is None:
+                    missing_ids.append(task_id)
+                    continue
+                if task.get("status") in TERMINAL_STATUSES:
+                    unchanged.append(_public_task(task))
+                    continue
+                task["status"] = TASK_STATUS_CANCELLED
+                task["error"] = "任务已取消"
+                task["data"] = []
+                task["updated_at"] = now
+                cancelled.append(_public_task(task))
+            if cancelled:
+                self._save_locked()
+        return {"items": [*cancelled, *unchanged], "cancelled_ids": [str(item.get("id")) for item in cancelled], "missing_ids": missing_ids}
+
     def _submit(
         self,
         identity: dict[str, object],
@@ -224,8 +250,12 @@ class ImageTaskService:
         started = time.time()
         self._update_task(key, status=TASK_STATUS_RUNNING, error="")
         try:
+            if self._is_cancelled(key):
+                return
             handler = self.edit_handler if mode == "edit" else self.generation_handler
             result = handler(payload)
+            if self._is_cancelled(key):
+                return
             if not isinstance(result, dict):
                 raise RuntimeError("image task returned streaming result unexpectedly")
             data = result.get("data")
@@ -243,6 +273,8 @@ class ImageTaskService:
                 urls=_collect_image_urls(data),
             )
         except Exception as exc:
+            if self._is_cancelled(key):
+                return
             error_message = str(exc) or "image task failed"
             self._update_task(key, status=TASK_STATUS_ERROR, error=error_message, data=[])
             self._log_call(
@@ -298,9 +330,16 @@ class ImageTaskService:
             task = self._tasks.get(key)
             if task is None:
                 return
+            if task.get("status") == TASK_STATUS_CANCELLED and updates.get("status") != TASK_STATUS_CANCELLED:
+                return
             task.update(updates)
             task["updated_at"] = _now_iso()
             self._save_locked()
+
+    def _is_cancelled(self, key: str) -> bool:
+        with self._lock:
+            task = self._tasks.get(key)
+            return bool(task and task.get("status") == TASK_STATUS_CANCELLED)
 
     def _load_locked(self) -> dict[str, dict[str, Any]]:
         if not self.path.exists():
@@ -321,7 +360,7 @@ class ImageTaskService:
             if not task_id or not owner:
                 continue
             status = _clean(item.get("status"))
-            if status not in {TASK_STATUS_QUEUED, TASK_STATUS_RUNNING, TASK_STATUS_SUCCESS, TASK_STATUS_ERROR}:
+            if status not in {TASK_STATUS_QUEUED, TASK_STATUS_RUNNING, TASK_STATUS_SUCCESS, TASK_STATUS_ERROR, TASK_STATUS_CANCELLED}:
                 status = TASK_STATUS_ERROR
             task = {
                 "id": task_id,

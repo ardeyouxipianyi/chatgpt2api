@@ -26,6 +26,11 @@ DEFAULT_BACKUP_INCLUDE = {
     "auth_keys_snapshot": True,
     "images": False,
 }
+DEFAULT_REVERSE_PROMPT_INSTRUCTION = (
+    "请根据这张图片反推出可用于 AI 画图的中文提示词。"
+    "只输出一段可直接用于生图的提示词，尽量包含主体、构图、风格、光线、色彩、细节、镜头与氛围；"
+    "不要解释过程，不要加入无关说明。"
+)
 
 
 def _normalize_bool(value: object, default: bool = False) -> bool:
@@ -195,6 +200,13 @@ class ConfigStore:
             return 3
 
     @property
+    def image_empty_result_retry_enabled(self) -> bool:
+        value = self.data.get("image_empty_result_retry_enabled", True)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @property
     def auto_remove_invalid_accounts(self) -> bool:
         value = self.data.get("auto_remove_invalid_accounts", False)
         if isinstance(value, str):
@@ -229,6 +241,10 @@ class ConfigStore:
     @property
     def global_system_prompt(self) -> str:
         return str(self.data.get("global_system_prompt") or "").strip()
+
+    @property
+    def reverse_prompt_instruction(self) -> str:
+        return str(self.data.get("reverse_prompt_instruction") or DEFAULT_REVERSE_PROMPT_INSTRUCTION).strip() or DEFAULT_REVERSE_PROMPT_INSTRUCTION
 
     @property
     def images_dir(self) -> Path:
@@ -278,12 +294,14 @@ class ConfigStore:
         data["image_retention_days"] = self.image_retention_days
         data["image_poll_timeout_secs"] = self.image_poll_timeout_secs
         data["image_account_concurrency"] = self.image_account_concurrency
+        data["image_empty_result_retry_enabled"] = self.image_empty_result_retry_enabled
         data["auto_remove_invalid_accounts"] = self.auto_remove_invalid_accounts
         data["auto_remove_rate_limited_accounts"] = self.auto_remove_rate_limited_accounts
         data["log_levels"] = self.log_levels
         data["sensitive_words"] = self.sensitive_words
         data["ai_review"] = self.ai_review
         data["global_system_prompt"] = self.global_system_prompt
+        data["reverse_prompt_instruction"] = self.reverse_prompt_instruction
         data["backup"] = self.get_backup_settings()
         data.pop("auth-key", None)
         return data

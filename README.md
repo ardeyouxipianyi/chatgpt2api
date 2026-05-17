@@ -3,6 +3,9 @@
 
 <p align="center">ChatGPT2API 主要是对 ChatGPT 官网相关能力进行逆向整理与封装，提供面向 ChatGPT 图片生成、图片编辑、多图组图编辑场景的 OpenAI 兼容图片 API / 代理，并集成在线画图、号池管理、多种账号导入方式与 Docker 自托管部署能力。</p>
 
+> [!NOTE]
+> 这是基于 [basketikun/chatgpt2api](https://github.com/basketikun/chatgpt2api) 的改版分支。改版重点放在网页画图体验、画布式图片创作、多人分享使用、用户数据隔离，以及 `3000` 统一网页/API 入口。
+
 > [!WARNING]
 > 免责声明：
 >
@@ -22,12 +25,14 @@
 
 ## 快速开始
 
-已发布镜像支持 `linux/amd64` 与 `linux/arm64`，在 x86 服务器和 Apple Silicon / ARM Linux 设备上都会自动拉取匹配架构的版本。
+本改版推荐使用 Docker Compose 从源码构建运行。
 
 ### Docker 运行
 
+当前改版仓库默认会从本地源码构建镜像，确保运行的是本改版而不是原项目镜像。
+
 ```bash
-git clone git@github.com:basketikun/chatgpt2api.git
+git clone https://github.com/你的用户名/chatgpt2api.git
 cd chatgpt2api
 docker compose up -d
 ```
@@ -75,6 +80,16 @@ environment:
 ```
 
 ## 功能
+
+### 改版增强
+
+- 新增画布式图片创作：提示词、生成结果、编辑要求和参考图会形成节点链路，支持整理、定位、复制节点、删除画布和保存恢复。
+- 画布支持从空白输入生成新节点，也支持选中已有编辑节点后复制当前编辑要求并重新生成分支。
+- 画布内置反推提示词，可上传图片或使用当前图片节点，反推要求支持后端全局保存。
+- 画图页和画布页支持图片任务取消、空结果重试、失败重试、图片预览放大、张数和比例控制。
+- 普通用户密钥可作为独立用户使用，画布项目按用户隔离保存到后端。
+- 开发环境提供 `3000` 统一入口：网页访问 `http://localhost:3000`，OpenAI 兼容 API 使用 `http://localhost:3000/v1`。
+- 设置页增加大类配置折叠、R2 备份管理、用户密钥管理和反推提示词全局设置。
 
 ### API 兼容能力
 

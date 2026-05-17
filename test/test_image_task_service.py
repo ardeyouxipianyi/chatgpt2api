@@ -144,6 +144,57 @@ class ImageTaskServiceTests(unittest.TestCase):
             self.assertEqual([item["status"] for item in result["items"]], ["error", "error"])
             self.assertTrue(all("已中断" in item.get("error", "") for item in result["items"]))
 
+    def test_cancel_running_task_ignores_late_handler_result(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            started = False
+
+            def handler(_payload):
+                nonlocal started
+                started = True
+                time.sleep(0.1)
+                return {"data": [{"url": "http://example.test/late.png"}]}
+
+            service = self.make_service(Path(tmp_dir) / "image_tasks.json", handler)
+            service.submit_generation(
+                OWNER,
+                client_task_id="cancel-task",
+                prompt="cat",
+                model="gpt-image-2",
+                size=None,
+                base_url="http://local.test",
+            )
+            deadline = time.time() + 1
+            while not started and time.time() < deadline:
+                time.sleep(0.01)
+
+            cancelled = service.cancel_tasks(OWNER, ["cancel-task"])
+            time.sleep(0.2)
+            result = service.list_tasks(OWNER, ["cancel-task"])
+
+            self.assertEqual(cancelled["cancelled_ids"], ["cancel-task"])
+            self.assertEqual(result["items"][0]["status"], "cancelled")
+            self.assertEqual(result["items"][0].get("data"), [])
+
+    def test_cancel_terminal_task_leaves_it_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = self.make_service(Path(tmp_dir) / "image_tasks.json")
+            service.submit_generation(
+                OWNER,
+                client_task_id="done-task",
+                prompt="cat",
+                model="gpt-image-2",
+                size=None,
+                base_url="http://local.test",
+            )
+            wait_for_task(service, OWNER, "done-task", "success")
+
+            cancelled = service.cancel_tasks(OWNER, ["done-task", "missing-task"])
+            result = service.list_tasks(OWNER, ["done-task"])
+
+            self.assertEqual(cancelled["cancelled_ids"], [])
+            self.assertEqual(cancelled["missing_ids"], ["missing-task"])
+            self.assertEqual(result["items"][0]["status"], "success")
+
 
 if __name__ == "__main__":
     unittest.main()

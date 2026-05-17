@@ -136,6 +136,33 @@
   .hide-scrollbar::-webkit-scrollbar {
     display: none;
   }
+
+  .image-results-scrollbar {
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(120, 113, 108, 0.36) transparent;
+  }
+
+  .image-results-scrollbar::-webkit-scrollbar {
+    width: 10px;
+  }
+
+  .image-results-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .image-results-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(120, 113, 108, 0.28);
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+  }
+
+  .image-results-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(87, 83, 78, 0.42);
+    border: 3px solid transparent;
+    background-clip: padding-box;
+  }
 }
 
 @keyframes grow {

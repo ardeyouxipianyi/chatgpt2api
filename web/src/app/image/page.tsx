@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import {
+  cancelImageTasks,
   createImageEditTask,
   createImageGenerationTask,
   fetchAccounts,
@@ -149,6 +150,15 @@ async function buildReferenceImageFromStoredImage(image: StoredImage, fileName: 
 }
 
 function taskDataToStoredImage(image: StoredImage, task: ImageTask): StoredImage {
+  if (task.status === "cancelled") {
+    return {
+      ...image,
+      taskId: task.id,
+      status: "error",
+      error: task.error || "任务已取消",
+    };
+  }
+
   if (task.status === "success") {
     const first = task.data?.[0];
     if (!first?.b64_json && !first?.url) {
@@ -200,6 +210,35 @@ function pickFallbackConversationId(conversations: ImageConversation[]) {
 
 function sortImageConversations(conversations: ImageConversation[]) {
   return [...conversations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+function hasLoadingImageTasks(conversations: ImageConversation[]) {
+  return conversations.some((conversation) =>
+    conversation.turns.some(
+      (turn) =>
+        !turn.resultsDeleted &&
+        (turn.status === "queued" || turn.status === "generating") &&
+        turn.images.some((image) => image.status === "loading" && image.taskId),
+    ),
+  );
+}
+
+function getTurnNodeLabel(turn: ImageTurn, index: number) {
+  const mode = turn.mode === "edit" ? "编辑图" : "文生图";
+  return `第 ${index + 1} 轮，${mode}，${getTurnStatusText(turn.status)}`;
+}
+
+function getTurnStatusText(status: ImageTurnStatus) {
+  if (status === "queued") {
+    return "排队中";
+  }
+  if (status === "generating") {
+    return "处理中";
+  }
+  if (status === "success") {
+    return "已完成";
+  }
+  return "失败";
 }
 
 function deriveTurnStatus(turn: ImageTurn): Pick<ImageTurn, "status" | "error"> {
@@ -357,6 +396,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const [lightboxImages, setLightboxImages] = useState<ImageLightboxItem[]>([]);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<
     | { type: "one"; id: string }
     | { type: "prompt"; conversationId: string; turnId: string }
@@ -486,6 +526,48 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   }, [selectedConversation?.updatedAt, selectedConversation?.turns.length, selectedConversation]);
 
   useEffect(() => {
+    setActiveTurnId(selectedConversation?.turns.at(-1)?.id ?? null);
+  }, [selectedConversation?.id]);
+
+  const updateActiveTurnFromScroll = useCallback(() => {
+    const viewport = resultsViewportRef.current;
+    if (!viewport) {
+      return;
+    }
+    const nodes = Array.from(viewport.querySelectorAll<HTMLElement>("[data-image-turn-id]"));
+    if (nodes.length === 0) {
+      setActiveTurnId(null);
+      return;
+    }
+    const viewportTop = viewport.getBoundingClientRect().top;
+    let closest = nodes[0];
+    let closestDistance = Number.POSITIVE_INFINITY;
+    for (const node of nodes) {
+      const distance = Math.abs(node.getBoundingClientRect().top - viewportTop - 16);
+      if (distance < closestDistance) {
+        closest = node;
+        closestDistance = distance;
+      }
+    }
+    setActiveTurnId(closest.getAttribute("data-image-turn-id"));
+  }, []);
+
+  const scrollToTurn = useCallback((turnId: string) => {
+    const viewport = resultsViewportRef.current;
+    if (!viewport) {
+      return;
+    }
+    const target = Array.from(viewport.querySelectorAll<HTMLElement>("[data-image-turn-id]")).find(
+      (node) => node.getAttribute("data-image-turn-id") === turnId,
+    );
+    if (!target) {
+      return;
+    }
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    setActiveTurnId(turnId);
+  }, []);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
@@ -520,6 +602,36 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       setSelectedConversationId(pickFallbackConversationId(conversations));
     }
   }, [conversations, selectedConversationId]);
+
+  useEffect(() => {
+    if (!hasLoadingImageTasks(conversations)) {
+      return;
+    }
+
+    let stopped = false;
+    const syncLoadingTasks = async () => {
+      const current = conversationsRef.current;
+      if (!hasLoadingImageTasks(current)) {
+        return;
+      }
+      const synced = await syncConversationImageTasks(current);
+      if (stopped || synced === current) {
+        return;
+      }
+      conversationsRef.current = synced;
+      setConversations(synced);
+    };
+
+    const interval = window.setInterval(() => {
+      void syncLoadingTasks();
+    }, 3000);
+
+    void syncLoadingTasks();
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
+  }, [conversations]);
 
   const persistConversation = async (conversation: ImageConversation) => {
     const nextConversations = sortImageConversations([
@@ -838,6 +950,9 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               return turn;
             }
             const images = turn.images.map((image) => {
+              if (image.status !== "loading") {
+                return image;
+              }
               const taskId = image.taskId || image.id;
               const task = taskMap.get(taskId);
               return task ? taskDataToStoredImage({ ...image, taskId }, task) : image;
@@ -1009,6 +1124,60 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     [runConversationQueue],
   );
 
+  const handleCancelTurn = useCallback(
+    async (conversationId: string, turnId: string) => {
+      const conversation = conversationsRef.current.find((item) => item.id === conversationId);
+      const targetTurn = conversation?.turns.find((turn) => turn.id === turnId);
+      if (!conversation || !targetTurn) {
+        return;
+      }
+
+      const taskIds = targetTurn.images.flatMap((image) =>
+        image.status === "loading" && image.taskId ? [image.taskId] : [],
+      );
+
+      await updateConversation(conversationId, (current) => {
+        const source = current ?? conversation;
+        return {
+          ...source,
+          updatedAt: new Date().toISOString(),
+          turns: source.turns.map((turn) => {
+            if (turn.id !== turnId) {
+              return turn;
+            }
+            const images = turn.images.map((image) =>
+              image.status === "loading"
+                ? {
+                    ...image,
+                    status: "error" as const,
+                    error: "任务已取消",
+                  }
+                : image,
+            );
+            return {
+              ...turn,
+              status: "error" as const,
+              error: "任务已取消",
+              images,
+            };
+          }),
+        };
+      });
+
+      if (taskIds.length > 0) {
+        try {
+          await cancelImageTasks(taskIds);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "取消任务失败";
+          toast.error(message);
+          return;
+        }
+      }
+      toast.success("已取消任务");
+    },
+    [updateConversation],
+  );
+
   const handleRetryImage = useCallback(
     async (conversationId: string, turnId: string, imageId: string) => {
       const conversation = conversationsRef.current.find((item) => item.id === conversationId);
@@ -1052,6 +1221,109 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       void runConversationQueue(conversationId);
     },
     [runConversationQueue],
+  );
+
+  const handleRetryFailedImages = useCallback(
+    async (conversationId: string, turnId: string) => {
+      const conversation = conversationsRef.current.find((item) => item.id === conversationId);
+      const sourceTurn = conversation?.turns.find((turn) => turn.id === turnId);
+      if (!conversation || !sourceTurn || !sourceTurn.prompt.trim()) {
+        return;
+      }
+
+      const failedCount = sourceTurn.images.filter((image) => image.status === "error").length;
+      if (failedCount === 0) {
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const nextConversation = {
+        ...conversation,
+        updatedAt: now,
+        turns: conversation.turns.map((turn) => {
+          if (turn.id !== turnId) {
+            return turn;
+          }
+
+          const images = turn.images.map((image) => {
+            if (image.status !== "error") {
+              return image;
+            }
+            const retryImageId = `${turnId}-${createId()}`;
+            return {
+              id: retryImageId,
+              taskId: retryImageId,
+              status: "loading" as const,
+            };
+          });
+          const derived = deriveTurnStatus({ ...turn, status: "queued", images });
+          return {
+            ...turn,
+            ...derived,
+            images,
+          };
+        }),
+      };
+
+      setSelectedConversationId(conversationId);
+      await persistConversation(nextConversation);
+      void runConversationQueue(conversationId);
+      toast.success(`已重试 ${failedCount} 张失败图片`);
+    },
+    [runConversationQueue],
+  );
+
+  const handleClearFailedRecords = useCallback(
+    async (conversationId: string) => {
+      const conversation = conversationsRef.current.find((item) => item.id === conversationId);
+      if (!conversation) {
+        return;
+      }
+
+      let removedCount = 0;
+      const turns = conversation.turns
+        .map((turn) => {
+          if (turn.resultsDeleted) {
+            return turn;
+          }
+          const images = turn.images.filter((image) => {
+            if (image.status === "error") {
+              removedCount += 1;
+              return false;
+            }
+            return true;
+          });
+          if (images.length === 0) {
+            return null;
+          }
+          const derived = deriveTurnStatus({ ...turn, images });
+          return {
+            ...turn,
+            ...derived,
+            images,
+          };
+        })
+        .filter((turn): turn is ImageTurn => Boolean(turn));
+
+      if (removedCount === 0) {
+        return;
+      }
+
+      if (turns.length === 0) {
+        await handleDeleteConversation(conversationId);
+        toast.success(`已清理 ${removedCount} 条失败记录`);
+        return;
+      }
+
+      const nextConversation = {
+        ...conversation,
+        updatedAt: new Date().toISOString(),
+        turns,
+      };
+      await persistConversation(nextConversation);
+      toast.success(`已清理 ${removedCount} 条失败记录`);
+    },
+    [],
   );
 
   useEffect(() => {
@@ -1176,7 +1448,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           </DialogContent>
         </Dialog>
 
-        <div className="flex min-h-0 flex-col gap-2 sm:gap-4">
+        <div className="relative flex min-h-0 flex-col gap-2 sm:gap-4">
           <div className="flex items-center justify-between gap-2 px-1 lg:hidden">
             <Button
               variant="outline"
@@ -1205,7 +1477,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
 
           <div
             ref={resultsViewportRef}
-            className="hide-scrollbar min-h-0 flex-1 overscroll-contain overflow-y-auto px-1 py-2 sm:px-4 sm:py-4"
+            className="image-results-scrollbar min-h-0 flex-1 scroll-smooth overscroll-contain overflow-y-auto px-1 py-2 pr-3 sm:px-4 sm:py-4 md:pr-14"
+            onScroll={updateActiveTurnFromScroll}
           >
             <ImageResults
               selectedConversation={selectedConversation}
@@ -1215,10 +1488,47 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               onDeleteResults={openDeleteResultsConfirm}
               onReuseTurnConfig={handleReuseTurnConfig}
               onRegenerateTurn={handleRegenerateTurn}
+              onRetryFailedImages={handleRetryFailedImages}
               onRetryImage={handleRetryImage}
+              onCancelTurn={handleCancelTurn}
+              onClearFailedRecords={handleClearFailedRecords}
               formatConversationTime={formatConversationTime}
             />
           </div>
+
+          {selectedConversation && selectedConversation.turns.length > 0 ? (
+            <nav
+              aria-label="对话轮次跳转"
+              className="pointer-events-none absolute top-14 right-1 bottom-[8.5rem] hidden items-center md:flex"
+            >
+              <div className="pointer-events-auto flex max-h-full flex-col gap-1 overflow-y-auto rounded-full border border-stone-200/80 bg-white/90 p-1.5 shadow-[0_16px_50px_-28px_rgba(15,23,42,0.45)] backdrop-blur">
+                {selectedConversation.turns.map((turn, index) => {
+                  const active = turn.id === activeTurnId;
+                  return (
+                    <button
+                      key={turn.id}
+                      type="button"
+                      onClick={() => scrollToTurn(turn.id)}
+                      className={[
+                        "flex size-8 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold transition",
+                        active
+                          ? "bg-stone-950 text-white shadow-sm"
+                          : turn.status === "generating" || turn.status === "queued"
+                            ? "bg-amber-50 text-amber-700 hover:bg-amber-100"
+                            : turn.status === "error"
+                              ? "bg-rose-50 text-rose-600 hover:bg-rose-100"
+                              : "bg-stone-100 text-stone-500 hover:bg-stone-200 hover:text-stone-900",
+                      ].join(" ")}
+                      aria-label={getTurnNodeLabel(turn, index)}
+                      title={getTurnNodeLabel(turn, index)}
+                    >
+                      {index + 1}
+                    </button>
+                  );
+                })}
+              </div>
+            </nav>
+          ) : null}
 
           <ImageComposer
             prompt={imagePrompt}

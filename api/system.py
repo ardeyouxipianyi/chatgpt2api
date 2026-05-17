@@ -24,6 +24,10 @@ class ProxyTestRequest(BaseModel):
     url: str = ""
 
 
+class ReversePromptInstructionRequest(BaseModel):
+    instruction: str = ""
+
+
 class ImageDeleteRequest(BaseModel):
     paths: list[str] = []
     start_date: str = ""
@@ -70,6 +74,17 @@ def create_router(app_version: str) -> APIRouter:
     async def save_settings(body: SettingsUpdateRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
         return {"config": config.update(body.model_dump(mode="python"))}
+
+    @router.get("/api/reverse-prompt-instruction")
+    async def get_reverse_prompt_instruction(authorization: str | None = Header(default=None)):
+        require_identity(authorization)
+        return {"instruction": config.reverse_prompt_instruction}
+
+    @router.post("/api/reverse-prompt-instruction")
+    async def save_reverse_prompt_instruction(body: ReversePromptInstructionRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        updated = config.update({"reverse_prompt_instruction": body.instruction.strip()})
+        return {"instruction": updated.get("reverse_prompt_instruction") or config.reverse_prompt_instruction, "config": updated}
 
     @router.get("/api/images")
     async def get_images(request: Request, start_date: str = "", end_date: str = "", authorization: str | None = Header(default=None)):

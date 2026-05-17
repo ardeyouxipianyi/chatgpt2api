@@ -1,11 +1,14 @@
 import base64
+import binascii
 import hashlib
 import json
+import mimetypes
 import re
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Iterator
+from urllib.parse import unquote, urlparse
 
 from curl_cffi import requests
 from fastapi import HTTPException
@@ -13,6 +16,7 @@ from utils.log import logger
 
 IMAGE_MODELS = {"gpt-image-2", "codex-gpt-image-2"}
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
+MAX_REMOTE_IMAGE_BYTES = 25 * 1024 * 1024
 
 
 def new_uuid() -> str:
@@ -167,6 +171,116 @@ def extract_prompt_from_message_content(content: object) -> str:
     return "\n".join(parts).strip()
 
 
+def _clean_mime(value: object, default: str = "image/png") -> str:
+    mime = str(value or "").split(";", 1)[0].strip().lower()
+    if mime == "image/jpg":
+        return "image/jpeg"
+    return mime if mime.startswith("image/") else default
+
+
+def _decode_base64_image(value: str, mime: str = "image/png") -> tuple[bytes, str] | None:
+    normalized = "".join(value.strip().split())
+    if not normalized:
+        return None
+    try:
+        return base64.b64decode(normalized, validate=True), _clean_mime(mime)
+    except (binascii.Error, ValueError):
+        return None
+
+
+def _decode_data_url(value: str, default_mime: str = "image/png") -> tuple[bytes, str] | None:
+    if not value.startswith("data:"):
+        return None
+    header, _, data = value.partition(",")
+    if not data or ";base64" not in header.lower():
+        return None
+    mime = _clean_mime(header.split(";", 1)[0].removeprefix("data:"), default_mime)
+    return _decode_base64_image(data, mime)
+
+
+def _read_local_image_url(value: str, default_mime: str = "image/png") -> tuple[bytes, str] | None:
+    parsed = urlparse(value)
+    image_prefix = "/images/"
+    path = unquote(parsed.path or "")
+    if not path.startswith(image_prefix):
+        return None
+
+    rel_path = path.removeprefix(image_prefix).lstrip("/")
+    if not rel_path:
+        return None
+
+    try:
+        from services.config import config
+
+        root = config.images_dir.resolve()
+        image_path = (root / rel_path).resolve()
+        image_path.relative_to(root)
+    except Exception:
+        return None
+
+    if not image_path.is_file():
+        return None
+    content = image_path.read_bytes()
+    if not content or len(content) > MAX_REMOTE_IMAGE_BYTES:
+        return None
+    mime_type = mimetypes.guess_type(image_path.name)[0] or default_mime
+    return content, _clean_mime(mime_type, default_mime)
+
+
+def _download_image_url(value: str, default_mime: str = "image/png") -> tuple[bytes, str] | None:
+    if not value.startswith(("http://", "https://")):
+        return None
+    local_image = _read_local_image_url(value, default_mime)
+    if local_image:
+        return local_image
+    response = requests.get(value, timeout=30)
+    ensure_ok(response, "download image")
+    content = bytes(response.content or b"")
+    if not content or len(content) > MAX_REMOTE_IMAGE_BYTES:
+        return None
+    return content, _clean_mime(response.headers.get("content-type"), default_mime)
+
+
+def decode_image_source(source: object, default_mime: str = "image/png") -> tuple[bytes, str] | None:
+    if isinstance(source, (bytes, bytearray)):
+        return bytes(source), _clean_mime(default_mime)
+
+    mime = default_mime
+    if isinstance(source, dict):
+        mime = _clean_mime(
+            source.get("media_type") or source.get("mediaType") or source.get("mime") or source.get("content_type"),
+            default_mime,
+        )
+        image_url = source.get("image_url")
+        if isinstance(image_url, dict):
+            decoded = decode_image_source(image_url.get("url"), mime)
+            if decoded:
+                return decoded
+        elif image_url is not None:
+            decoded = decode_image_source(image_url, mime)
+            if decoded:
+                return decoded
+        for key in ("url", "data", "base64", "image", "file_data"):
+            if key in source:
+                decoded = decode_image_source(source.get(key), mime)
+                if decoded:
+                    return decoded
+        return None
+
+    if not isinstance(source, str):
+        return None
+    value = source.strip()
+    if not value:
+        return None
+    if value.startswith("data:"):
+        return _decode_data_url(value, mime)
+    if value.startswith(("http://", "https://")):
+        return _download_image_url(value, mime)
+    if value.startswith("file:"):
+        return None
+    return _decode_base64_image(value, mime)
+
+
 def extract_image_from_message_content(content: object) -> list[tuple[bytes, str]]:
     if not isinstance(content, list):
         return []
@@ -175,19 +289,10 @@ def extract_image_from_message_content(content: object) -> list[tuple[bytes, str
         if not isinstance(item, dict):
             continue
         item_type = str(item.get("type") or "").strip()
-        if item_type == "image_url":
-            url_obj = item.get("image_url") or item
-            url = str(url_obj.get("url") or "") if isinstance(url_obj, dict) else str(url_obj)
-            if url.startswith("data:"):
-                header, _, data = url.partition(",")
-                mime = header.split(";")[0].removeprefix("data:")
-                images.append((base64.b64decode(data), mime or "image/png"))
-        elif item_type == "input_image":
-            image_url = str(item.get("image_url") or "")
-            if image_url.startswith("data:"):
-                header, _, data = image_url.partition(",")
-                mime = header.split(";")[0].removeprefix("data:")
-                images.append((base64.b64decode(data), mime or "image/png"))
+        if item_type in {"image_url", "input_image", "image", "file"}:
+            decoded = decode_image_source(item)
+            if decoded:
+                images.append(decoded)
     return images
 
 
