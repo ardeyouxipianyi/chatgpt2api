@@ -4,7 +4,7 @@
 <p align="center">ChatGPT2API 主要是对 ChatGPT 官网相关能力进行逆向整理与封装，提供面向 ChatGPT 图片生成、图片编辑、多图组图编辑场景的 OpenAI 兼容图片 API / 代理，并集成在线画图、号池管理、多种账号导入方式与 Docker 自托管部署能力。</p>
 
 > [!NOTE]
-> 这是基于 [basketikun/chatgpt2api](https://github.com/basketikun/chatgpt2api) 的改版分支。改版重点放在网页画图体验、画布式图片创作、多人分享使用、用户数据隔离，以及 `3000` 统一网页/API 入口。
+> 这是基于原项目 `basketikun/chatgpt2api` 的改版分支，当前改版仓库为 [ardeyouxipianyi/chatgpt2api](https://github.com/ardeyouxipianyi/chatgpt2api)。改版重点放在网页画图体验、画布式图片创作、多人分享使用、用户数据隔离，以及 `3000` 统一网页/API 入口。
 
 > [!WARNING]
 > 免责声明：
@@ -32,7 +32,7 @@
 当前改版仓库默认会从本地源码构建镜像，确保运行的是本改版而不是原项目镜像。
 
 ```bash
-git clone https://github.com/你的用户名/chatgpt2api.git
+git clone https://github.com/ardeyouxipianyi/chatgpt2api.git
 cd chatgpt2api
 docker compose up -d
 ```
@@ -48,7 +48,7 @@ docker compose up -d
 启动后端：
 
 ```bash
-git clone git@github.com:basketikun/chatgpt2api.git
+git clone git@github.com:ardeyouxipianyi/chatgpt2api.git
 cd chatgpt2api
 uv sync
 uv run main.py
@@ -326,10 +326,10 @@ curl http://localhost:8000/v1/responses \
 
 感谢所有为本项目做出贡献的开发者：
 
-<a href="https://github.com/basketikun/chatgpt2api/graphs/contributors">
-  <img alt="Contributors" src="https://contrib.rocks/image?repo=basketikun/chatgpt2api" />
+<a href="https://github.com/ardeyouxipianyi/chatgpt2api/graphs/contributors">
+  <img alt="Contributors" src="https://contrib.rocks/image?repo=ardeyouxipianyi/chatgpt2api" />
 </a>
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/chart?repos=basketikun/chatgpt2api&type=date&legend=top-left)](https://www.star-history.com/?repos=basketikun%2Fchatgpt2api&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/chart?repos=ardeyouxipianyi/chatgpt2api&type=date&legend=top-left)](https://www.star-history.com/?repos=ardeyouxipianyi%2Fchatgpt2api&type=date&legend=top-left)
