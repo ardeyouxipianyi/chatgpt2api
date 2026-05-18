@@ -23,7 +23,12 @@ export function ConfigCard() {
   const setRefreshAccountIntervalMinute = useSettingsStore((state) => state.setRefreshAccountIntervalMinute);
   const setImageRetentionDays = useSettingsStore((state) => state.setImageRetentionDays);
   const setImagePollTimeoutSecs = useSettingsStore((state) => state.setImagePollTimeoutSecs);
+  const setImageUnacceptedTaskTimeoutSecs = useSettingsStore((state) => state.setImageUnacceptedTaskTimeoutSecs);
+  const setImageStalledResultTimeoutSecs = useSettingsStore((state) => state.setImageStalledResultTimeoutSecs);
   const setImageAccountConcurrency = useSettingsStore((state) => state.setImageAccountConcurrency);
+  const setImagePoolFailoverEnabled = useSettingsStore((state) => state.setImagePoolFailoverEnabled);
+  const setImagePoolMaxAttempts = useSettingsStore((state) => state.setImagePoolMaxAttempts);
+  const setImageAccountFailureCooldownSecs = useSettingsStore((state) => state.setImageAccountFailureCooldownSecs);
   const setImageEmptyResultRetryEnabled = useSettingsStore((state) => state.setImageEmptyResultRetryEnabled);
   const setAutoRemoveInvalidAccounts = useSettingsStore((state) => state.setAutoRemoveInvalidAccounts);
   const setAutoRemoveRateLimitedAccounts = useSettingsStore((state) => state.setAutoRemoveRateLimitedAccounts);
@@ -115,10 +120,34 @@ export function ConfigCard() {
             <p className="text-xs text-stone-500">单位秒，等待上游图片结果的最长时间。</p>
           </div>
           <div className="space-y-2">
+            <label className="text-sm text-stone-700">未进入生图等待</label>
+            <Input value={String(config?.image_unaccepted_task_timeout_secs || "")} onChange={(event) => setImageUnacceptedTaskTimeoutSecs(event.target.value)} placeholder="20" className="h-10 rounded-xl border-stone-200 bg-white" />
+            <p className="text-xs text-stone-500">远端还没确认开始生成时，最多等待多少秒后换号。</p>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm text-stone-700">卡住结果等待</label>
+            <Input value={String(config?.image_stalled_result_timeout_secs || "")} onChange={(event) => setImageStalledResultTimeoutSecs(event.target.value)} placeholder="60" className="h-10 rounded-xl border-stone-200 bg-white" />
+            <p className="text-xs text-stone-500">远端已经确认开始生成，但图片结果迟迟不出来时的等待上限。</p>
+          </div>
+          <div className="space-y-2">
             <label className="text-sm text-stone-700">单账号图片并发</label>
             <Input value={String(config?.image_account_concurrency || "")} onChange={(event) => setImageAccountConcurrency(event.target.value)} placeholder="1" className="h-10 rounded-xl border-stone-200 bg-white" />
             <p className="text-xs text-stone-500">限制每个账号同时处理的图片请求数量，默认 3。</p>
           </div>
+          <div className="space-y-2">
+            <label className="text-sm text-stone-700">图片失败换号次数</label>
+            <Input value={String(config?.image_pool_max_attempts || "")} onChange={(event) => setImagePoolMaxAttempts(event.target.value)} placeholder="3" className="h-10 rounded-xl border-stone-200 bg-white" />
+            <p className="text-xs text-stone-500">单张图最多尝试几个账号，默认 3。</p>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm text-stone-700">失败账号冷却</label>
+            <Input value={String(config?.image_account_failure_cooldown_secs ?? "")} onChange={(event) => setImageAccountFailureCooldownSecs(event.target.value)} placeholder="60" className="h-10 rounded-xl border-stone-200 bg-white" />
+            <p className="text-xs text-stone-500">单位秒，失败后短暂避开这个账号，填 0 表示不冷却。</p>
+          </div>
+          <label className="flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-700">
+            <Checkbox checked={Boolean(config?.image_pool_failover_enabled ?? true)} onCheckedChange={(checked) => setImagePoolFailoverEnabled(Boolean(checked))} />
+            图片失败自动换号
+          </label>
           <label className="flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-700">
             <Checkbox checked={Boolean(config?.image_empty_result_retry_enabled ?? true)} onCheckedChange={(checked) => setImageEmptyResultRetryEnabled(Boolean(checked))} />
             图片空结果自动重试

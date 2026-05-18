@@ -92,6 +92,29 @@ class AuthService:
             items = [item for item in self._items if role is None or item.get("role") == role]
             return [self._public_item(item) for item in items]
 
+    def replace_keys(self, items: list[dict[str, object]]) -> int:
+        with self._lock:
+            normalized = [item for raw in items if (item := self._normalize_item(raw)) is not None]
+            self._items = normalized
+            self._last_used_flush_at.clear()
+            self._save()
+            return len(normalized)
+
+    def raw_key_exists(self, raw_key: str, role: AuthRole | None = None) -> bool:
+        candidate = self._clean(raw_key)
+        if not candidate:
+            return False
+        candidate_hash = _hash_key(candidate)
+        with self._lock:
+            self._reload_locked()
+            for item in self._items:
+                if role is not None and item.get("role") != role:
+                    continue
+                stored_hash = self._clean(item.get("key_hash"))
+                if stored_hash and hmac.compare_digest(stored_hash, candidate_hash):
+                    return True
+        return False
+
     def _has_key_hash_locked(self, key_hash: str, *, exclude_id: str = "") -> bool:
         for item in self._items:
             item_id = self._clean(item.get("id"))

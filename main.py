@@ -10,7 +10,7 @@ app = create_app()
 if __name__ == "__main__":
     uvicorn.run(
         app,
-        host=os.getenv("CHATGPT2API_HOST", "0.0.0.0"),
+        host=os.getenv("CHATGPT2API_HOST", "127.0.0.1"),
         port=int(os.getenv("CHATGPT2API_PORT", "8000")),
         access_log=False,
         log_level="info",

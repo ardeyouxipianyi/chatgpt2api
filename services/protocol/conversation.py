@@ -6,6 +6,7 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -52,6 +53,42 @@ def is_token_invalid_error(message: str) -> bool:
         or "authentication token has been invalidated" in text
         or "invalidated oauth token" in text
     )
+
+
+def is_image_quota_limit_message(message: str) -> bool:
+    text = str(message or "").lower()
+    if not text:
+        return False
+    exact_markers = (
+        "you've hit the free plan limit for image generation requests",
+        "you have hit the free plan limit for image generation requests",
+        "create more images when the limit resets",
+        "image generation requests",
+        "image generation limit",
+    )
+    if any(marker in text for marker in exact_markers) and ("limit" in text or "quota" in text):
+        return True
+    return "image" in text and "limit" in text and "resets in" in text
+
+
+def parse_image_quota_restore_at(message: str) -> str | None:
+    text = str(message or "").lower()
+    match = re.search(
+        r"resets?\s+in\s+"
+        r"(?:(\d+)\s*days?)?\s*"
+        r"(?:(\d+)\s*hours?)?\s*"
+        r"(?:and\s*)?"
+        r"(?:(\d+)\s*minutes?)?",
+        text,
+    )
+    if not match:
+        return None
+    days = int(match.group(1) or 0)
+    hours = int(match.group(2) or 0)
+    minutes = int(match.group(3) or 0)
+    if days <= 0 and hours <= 0 and minutes <= 0:
+        return None
+    return (datetime.now().astimezone() + timedelta(days=days, hours=hours, minutes=minutes)).isoformat(timespec="seconds")
 
 
 def image_stream_error_message(message: str) -> str:
@@ -512,6 +549,15 @@ def collect_text(backend: OpenAIBackendAPI, request: ConversationRequest) -> str
     return "".join(stream_text_deltas(backend, request))
 
 
+def image_result_poll_timeout_secs(image_task_accepted: bool) -> int:
+    base_timeout = config.image_poll_timeout_secs
+    if not config.image_pool_failover_enabled or config.image_pool_max_attempts <= 1:
+        return base_timeout
+    if not image_task_accepted:
+        return min(base_timeout, config.image_unaccepted_task_timeout_secs)
+    return min(base_timeout, config.image_stalled_result_timeout_secs)
+
+
 def stream_image_outputs(
         backend: OpenAIBackendAPI,
         request: ConversationRequest,
@@ -519,6 +565,8 @@ def stream_image_outputs(
         total: int = 1,
 ) -> Iterator[ImageOutput]:
     last: dict[str, Any] = {}
+    saw_async_status = False
+    saw_stream_complete = False
     for event in conversation_events(
             backend,
             prompt=request.prompt,
@@ -540,6 +588,10 @@ def stream_image_outputs(
         if event.get("type") == "conversation.event":
             raw = event.get("raw")
             raw_type = str(raw.get("type") or "") if isinstance(raw, dict) else ""
+            if raw_type == "conversation_async_status":
+                saw_async_status = True
+            elif raw_type == "message_stream_complete":
+                saw_stream_complete = True
             yield ImageOutput(
                 kind="progress",
                 model=request.model,
@@ -553,6 +605,8 @@ def stream_image_outputs(
     sediment_ids = [str(item) for item in last.get("sediment_ids") or []]
     message = str(last.get("text") or "").strip()
     is_text_response = last.get("tool_invoked") is False or last.get("turn_use_case") == "text"
+    image_task_accepted = saw_async_status or last.get("tool_invoked") is True or bool(file_ids or sediment_ids)
+    poll_timeout_secs = image_result_poll_timeout_secs(image_task_accepted)
     logger.info({
         "event": "image_stream_resolve_start",
         "conversation_id": conversation_id,
@@ -560,12 +614,20 @@ def stream_image_outputs(
         "sediment_ids": sediment_ids,
         "tool_invoked": last.get("tool_invoked"),
         "turn_use_case": last.get("turn_use_case"),
+        "saw_async_status": saw_async_status,
+        "saw_stream_complete": saw_stream_complete,
+        "poll_timeout_secs": poll_timeout_secs,
     })
     if message and not file_ids and not sediment_ids and (last.get("blocked") or is_text_response):
         yield ImageOutput(kind="message", model=request.model, index=index, total=total, text=message)
         return
 
-    image_urls = backend.resolve_conversation_image_urls(conversation_id, file_ids, sediment_ids)
+    image_urls = backend.resolve_conversation_image_urls(
+        conversation_id,
+        file_ids,
+        sediment_ids,
+        poll_timeout_secs=poll_timeout_secs,
+    )
     if image_urls:
         image_items = [
             {"b64_json": base64.b64encode(image_data).decode("ascii")}
@@ -593,21 +655,32 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
     emitted = False
     last_error = ""
     for index in range(1, request.n + 1):
-        empty_result_retries = 0
+        attempted_tokens: set[str] = set()
+        attempt_count = 0
+        max_attempts = max(1, int(config.image_pool_max_attempts or 1))
         while True:
             try:
-                token = account_service.get_available_access_token()
+                excluded = attempted_tokens if config.image_pool_failover_enabled else None
+                token = account_service.get_available_access_token(excluded)
             except RuntimeError as exc:
                 if emitted:
                     return
                 raise ImageGenerationError(str(exc) or "image generation failed") from exc
 
+            attempted_tokens.add(token)
+            attempt_count += 1
             emitted_for_token = False
             returned_message = False
             returned_result = False
+            quota_limited_message = ""
+            quota_limit_handled = False
+            result_recorded = False
             try:
                 backend = OpenAIBackendAPI(access_token=token)
                 for output in stream_image_outputs(backend, request, index, request.n):
+                    if output.kind == "message" and is_image_quota_limit_message(output.text):
+                        quota_limited_message = output.text
+                        break
                     if output.kind == "message" and request.message_as_error:
                         raise ImageGenerationError(
                             output.text or "Image generation was rejected by upstream policy.",
@@ -620,28 +693,54 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
                     returned_message = output.kind == "message"
                     returned_result = returned_result or output.kind == "result"
                     yield output
+                if quota_limited_message:
+                    last_error = quota_limited_message
+                    account_service.mark_image_limited(token, parse_image_quota_restore_at(quota_limited_message))
+                    quota_limit_handled = True
+                    logger.warning({
+                        "event": "image_quota_limit_failover",
+                        "model": request.model,
+                        "index": index,
+                        "attempt": attempt_count,
+                        "max_attempts": max_attempts,
+                        "error": quota_limited_message,
+                    })
+                    if config.image_pool_failover_enabled and attempt_count < max_attempts:
+                        continue
+                    raise ImageGenerationError(
+                        "no available image quota",
+                        status_code=429,
+                        error_type="insufficient_quota",
+                        code="insufficient_quota",
+                    )
                 if returned_message or not returned_result:
                     account_service.mark_image_result(token, False)
+                    result_recorded = True
                     if (
                         not returned_message
                         and not returned_result
                         and config.image_empty_result_retry_enabled
-                        and empty_result_retries < 1
                     ):
-                        empty_result_retries += 1
                         last_error = "image task returned no image data"
+                        if config.image_pool_failover_enabled:
+                            account_service.cooldown_image_token(token)
                         logger.warning({
                             "event": "image_empty_result_retry",
                             "model": request.model,
                             "index": index,
-                            "retry": empty_result_retries,
+                            "attempt": attempt_count,
+                            "max_attempts": max_attempts,
                         })
-                        continue
+                        if config.image_pool_failover_enabled and attempt_count < max_attempts:
+                            continue
+                        raise ImageGenerationError(image_stream_error_message(last_error))
                     return
                 account_service.mark_image_result(token, True)
+                result_recorded = True
                 break
             except ImageGenerationError:
-                account_service.mark_image_result(token, False)
+                if not quota_limit_handled and not result_recorded:
+                    account_service.mark_image_result(token, False)
                 raise
             except Exception as exc:
                 account_service.mark_image_result(token, False)
@@ -649,6 +748,18 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
                 logger.warning({"event": "image_stream_fail", "request_token": token, "error": last_error})
                 if not emitted_for_token and is_token_invalid_error(last_error):
                     account_service.remove_invalid_token(token, "image_stream")
+                    if config.image_pool_failover_enabled and attempt_count < max_attempts:
+                        continue
+                if config.image_pool_failover_enabled and not emitted_for_token and attempt_count < max_attempts:
+                    account_service.cooldown_image_token(token)
+                    logger.warning({
+                        "event": "image_stream_failover",
+                        "model": request.model,
+                        "index": index,
+                        "attempt": attempt_count,
+                        "max_attempts": max_attempts,
+                        "error": last_error,
+                    })
                     continue
                 raise ImageGenerationError(image_stream_error_message(last_error)) from exc
 

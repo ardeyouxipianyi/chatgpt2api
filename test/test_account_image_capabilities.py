@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -65,6 +66,46 @@ class AccountCapabilityTests(unittest.TestCase):
             self.assertEqual(updated["quota"], 0)
             self.assertEqual(updated["status"], "正常")
             self.assertTrue(updated["image_quota_unknown"])
+
+    def test_image_cooldown_temporarily_excludes_failed_token(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+            service.add_accounts(["token-1", "token-2"])
+            service.update_account("token-1", {"status": "正常", "quota": 1})
+            service.update_account("token-2", {"status": "正常", "quota": 1})
+
+            service.cooldown_image_token("token-1", seconds=60)
+
+            with service._lock:
+                tokens = service._list_ready_candidate_tokens()
+
+            self.assertEqual(tokens, ["token-2"])
+
+    def test_refresh_job_reports_progress_and_items(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+            service.add_accounts(["token-1", "token-2"])
+
+            def fake_fetch(access_token: str, _event: str = "fetch_remote_info"):
+                if access_token == "token-2":
+                    raise RuntimeError("remote failed")
+                return service.update_account(access_token, {"status": "正常", "quota": 2, "email": "a@example.com"})
+
+            service.fetch_remote_info = fake_fetch  # type: ignore[method-assign]
+            job = service.start_refresh_job(["token-1", "token-2"])
+
+            deadline = time.time() + 2
+            while job["status"] == "running" and time.time() < deadline:
+                time.sleep(0.01)
+                job = service.get_refresh_job(job["id"]) or job
+
+            self.assertEqual(job["status"], "finished")
+            self.assertEqual(job["total"], 2)
+            self.assertEqual(job["done"], 2)
+            self.assertEqual(job["refreshed"], 1)
+            self.assertEqual(job["failed"], 1)
+            self.assertEqual(len(job["errors"]), 1)
+            self.assertEqual(len(job["items"]), 2)
 
 
 class TokenLogTests(unittest.TestCase):

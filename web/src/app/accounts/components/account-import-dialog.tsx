@@ -26,7 +26,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
-import { createAccounts, type Account } from "@/lib/api";
+import { createAccounts, type Account, type AccountRefreshJob } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type ImportMethod = "menu" | "token" | "session" | "cpa";
@@ -34,6 +34,7 @@ type ImportMethod = "menu" | "token" | "session" | "cpa";
 type AccountImportDialogProps = {
   disabled?: boolean;
   onImported: (items: Account[]) => void;
+  onRefreshJobStarted?: (job: AccountRefreshJob) => void;
 };
 
 type PendingCpaImport = {
@@ -102,7 +103,7 @@ function MethodCard({
   );
 }
 
-export function AccountImportDialog({ disabled, onImported }: AccountImportDialogProps) {
+export function AccountImportDialog({ disabled, onImported, onRefreshJobStarted }: AccountImportDialogProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [method, setMethod] = useState<ImportMethod>("menu");
@@ -140,8 +141,11 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
 
     setIsSubmitting(true);
     try {
-      const data = await createAccounts(normalizedTokens);
+      const data = await createAccounts(normalizedTokens, { backgroundRefresh: true });
       onImported(data.items);
+      if (data.refresh_job) {
+        onRefreshJobStarted?.(data.refresh_job);
+      }
       setOpen(false);
       resetState();
 
@@ -152,7 +156,7 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
         );
       } else {
         toast.success(
-          `${successText ?? "导入完成"}，新增 ${data.added ?? 0} 个，跳过 ${data.skipped ?? 0} 个重复项，已自动刷新账号信息`,
+          `${successText ?? "导入完成"}，新增 ${data.added ?? 0} 个，跳过 ${data.skipped ?? 0} 个重复项，已开始后台刷新账号信息`,
         );
       }
     } catch (error) {

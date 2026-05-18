@@ -5,10 +5,12 @@ import { LoaderCircle } from "lucide-react";
 
 import { useAuthGuard } from "@/lib/use-auth-guard";
 
+import { AdminPasswordCard } from "./components/admin-password-card";
 import { BackupSettingsCard } from "./components/backup-settings-card";
 import { ConfigCard } from "./components/config-card";
 import { CPAPoolDialog } from "./components/cpa-pool-dialog";
 import { CPAPoolsCard } from "./components/cpa-pools-card";
+import { DataTransferCard } from "./components/data-transfer-card";
 import { ImportBrowserDialog } from "./components/import-browser-dialog";
 import { SettingsHeader } from "./components/settings-header";
 import { Sub2APIConnections } from "./components/sub2api-connections";
@@ -66,6 +68,8 @@ function SettingsPageContent() {
       <SettingsHeader />
       <section className="space-y-6">
         <ConfigCard />
+        <AdminPasswordCard />
+        <DataTransferCard />
         <BackupSettingsCard />
         <UserKeysCard />
         <CPAPoolsCard />

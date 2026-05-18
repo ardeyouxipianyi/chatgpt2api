@@ -36,6 +36,7 @@ class UserKeyUpdateRequest(BaseModel):
 
 class AccountCreateRequest(BaseModel):
     tokens: list[str] = Field(default_factory=list)
+    background_refresh: bool = False
 
 
 class AccountDeleteRequest(BaseModel):
@@ -153,6 +154,15 @@ def create_router() -> APIRouter:
         if not tokens:
             raise HTTPException(status_code=400, detail={"error": "tokens is required"})
         result = account_service.add_accounts(tokens)
+        if body.background_refresh:
+            refresh_job = account_service.start_refresh_job(tokens)
+            return {
+                **result,
+                "refreshed": 0,
+                "errors": [],
+                "refresh_job": refresh_job,
+                "items": refresh_job.get("items", result.get("items", [])),
+            }
         refresh_result = account_service.refresh_accounts(tokens)
         return {
             **result,
@@ -178,6 +188,27 @@ def create_router() -> APIRouter:
         if not access_tokens:
             raise HTTPException(status_code=400, detail={"error": "access_tokens is required"})
         return account_service.refresh_accounts(access_tokens)
+
+    @router.post("/api/accounts/refresh-jobs")
+    async def start_refresh_accounts_job(body: AccountRefreshRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        access_tokens = [str(token or "").strip() for token in body.access_tokens if str(token or "").strip()]
+        if not access_tokens:
+            access_tokens = account_service.list_tokens()
+        if not access_tokens:
+            raise HTTPException(status_code=400, detail={"error": "access_tokens is required"})
+        try:
+            return account_service.start_refresh_job(access_tokens)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+
+    @router.get("/api/accounts/refresh-jobs/{job_id}")
+    async def get_refresh_accounts_job(job_id: str, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        job = account_service.get_refresh_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail={"error": "refresh job not found"})
+        return job
 
     @router.post("/api/accounts/update")
     async def update_account(body: AccountUpdateRequest, authorization: str | None = Header(default=None)):

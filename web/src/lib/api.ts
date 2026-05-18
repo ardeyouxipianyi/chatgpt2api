@@ -36,12 +36,28 @@ type AccountMutationResponse = {
   removed?: number;
   refreshed?: number;
   errors?: Array<{ access_token: string; error: string }>;
+  refresh_job?: AccountRefreshJob;
 };
 
 type AccountRefreshResponse = {
   items: Account[];
   refreshed: number;
   errors: Array<{ access_token: string; error: string }>;
+};
+
+export type AccountRefreshJob = {
+  id: string;
+  status: "running" | "finished" | "error";
+  total: number;
+  done: number;
+  refreshed: number;
+  failed: number;
+  errors: Array<{ token?: string; access_token?: string; error: string }>;
+  items: Account[];
+  started_at?: string | null;
+  updated_at?: string | null;
+  finished_at?: string | null;
+  error?: string;
 };
 
 type AccountUpdateResponse = {
@@ -65,10 +81,16 @@ export type SettingsConfig = {
   refresh_account_interval_minute?: number | string;
   image_retention_days?: number | string;
   image_poll_timeout_secs?: number | string;
+  image_unaccepted_task_timeout_secs?: number | string;
+  image_stalled_result_timeout_secs?: number | string;
   image_account_concurrency?: number | string;
+  image_pool_failover_enabled?: boolean;
+  image_pool_max_attempts?: number | string;
+  image_account_failure_cooldown_secs?: number | string;
   image_empty_result_retry_enabled?: boolean;
   auto_remove_invalid_accounts?: boolean;
   auto_remove_rate_limited_accounts?: boolean;
+  admin_auth_key_editable?: boolean;
   log_levels?: string[];
   backup?: BackupSettings;
   backup_state?: BackupState;
@@ -82,6 +104,7 @@ export type BackupInclude = {
   sub2api: boolean;
   logs: boolean;
   image_tasks: boolean;
+  image_canvas: boolean;
   accounts_snapshot: boolean;
   auth_keys_snapshot: boolean;
   images: boolean;
@@ -262,14 +285,24 @@ export async function login(authKey: string) {
   });
 }
 
+export async function updateAdminPassword(currentKey: string, newKey: string) {
+  return httpRequest<LoginResponse>("/api/auth/admin-password", {
+    method: "POST",
+    body: {
+      current_key: currentKey,
+      new_key: newKey,
+    },
+  });
+}
+
 export async function fetchAccounts() {
   return httpRequest<AccountListResponse>("/api/accounts");
 }
 
-export async function createAccounts(tokens: string[]) {
+export async function createAccounts(tokens: string[], options: { backgroundRefresh?: boolean } = {}) {
   return httpRequest<AccountMutationResponse>("/api/accounts", {
     method: "POST",
-    body: { tokens },
+    body: { tokens, background_refresh: Boolean(options.backgroundRefresh) },
   });
 }
 
@@ -285,6 +318,17 @@ export async function refreshAccounts(accessTokens: string[]) {
     method: "POST",
     body: { access_tokens: accessTokens },
   });
+}
+
+export async function startAccountRefreshJob(accessTokens: string[]) {
+  return httpRequest<AccountRefreshJob>("/api/accounts/refresh-jobs", {
+    method: "POST",
+    body: { access_tokens: accessTokens },
+  });
+}
+
+export async function fetchAccountRefreshJob(jobId: string) {
+  return httpRequest<AccountRefreshJob>(`/api/accounts/refresh-jobs/${jobId}`);
 }
 
 export async function updateAccount(
@@ -503,6 +547,16 @@ export async function deleteBackup(key: string) {
   return httpRequest<{ ok: boolean }>("/api/backups/delete", {
     method: "POST",
     body: { key },
+  });
+}
+
+export async function importDataPackage(file: File, include: Partial<BackupInclude>) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("include", JSON.stringify(include));
+  return httpRequest<{ ok: boolean; result: { imported?: string[]; skipped?: string[]; counts?: Record<string, number> } }>("/api/data/import", {
+    method: "POST",
+    body: formData,
   });
 }
 

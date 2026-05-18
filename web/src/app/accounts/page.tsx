@@ -43,9 +43,11 @@ import {
 import {
   deleteAccounts,
   fetchAccounts,
-  refreshAccounts,
+  fetchAccountRefreshJob,
+  startAccountRefreshJob,
   updateAccount,
   type Account,
+  type AccountRefreshJob,
   type AccountStatus,
 } from "@/lib/api";
 import { useAuthGuard } from "@/lib/use-auth-guard";
@@ -176,9 +178,10 @@ function AccountsPageContent() {
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [editStatus, setEditStatus] = useState<AccountStatus>("正常");
   const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshJob, setRefreshJob] = useState<AccountRefreshJob | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const isRefreshing = refreshJob?.status === "running";
 
   const loadAccounts = async (silent = false) => {
     if (!silent) {
@@ -205,6 +208,63 @@ function AccountsPageContent() {
     didLoadRef.current = true;
     void loadAccounts();
   }, []);
+
+  useEffect(() => {
+    if (!refreshJob || refreshJob.status !== "running") {
+      return;
+    }
+
+    let stopped = false;
+    let timer: number | undefined;
+
+    const poll = async () => {
+      try {
+        const data = await fetchAccountRefreshJob(refreshJob.id);
+        if (stopped) {
+          return;
+        }
+        setRefreshJob(data);
+        setAccounts(data.items);
+        setSelectedIds((prev) => prev.filter((id) => data.items.some((item) => item.access_token === id)));
+
+        if (data.status === "running") {
+          timer = window.setTimeout(poll, 1000);
+          return;
+        }
+
+        if (data.status === "error") {
+          toast.error(data.error || "刷新任务失败");
+          return;
+        }
+
+        if (data.failed > 0) {
+          const firstError = data.errors[0]?.error;
+          toast.error(
+            `刷新完成：成功 ${data.refreshed} 个，失败 ${data.failed} 个${firstError ? `，首个错误：${firstError}` : ""}`,
+          );
+          return;
+        }
+
+        toast.success(`刷新完成：成功 ${data.refreshed} 个账号`);
+      } catch (error) {
+        if (stopped) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : "查询刷新进度失败";
+        setRefreshJob((prev) => (prev?.id === refreshJob.id ? { ...prev, status: "error", error: message } : prev));
+        toast.error(message);
+      }
+    };
+
+    void poll();
+
+    return () => {
+      stopped = true;
+      if (timer) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [refreshJob?.id, refreshJob?.status]);
 
   const filteredAccounts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -247,6 +307,13 @@ function AccountsPageContent() {
     const selectedSet = new Set(selectedIds);
     return accounts.filter((item) => selectedSet.has(item.access_token)).map((item) => item.access_token);
   }, [accounts, selectedIds]);
+
+  const refreshProgress = useMemo(() => {
+    if (!refreshJob || refreshJob.total <= 0) {
+      return 0;
+    }
+    return Math.min(100, Math.round((refreshJob.done / refreshJob.total) * 100));
+  }, [refreshJob]);
 
   const abnormalTokens = useMemo(() => {
     return accounts.filter((item) => item.status === "异常").map((item) => item.access_token);
@@ -292,24 +359,15 @@ function AccountsPageContent() {
       return;
     }
 
-    setIsRefreshing(true);
     try {
-      const data = await refreshAccounts(accessTokens);
+      const data = await startAccountRefreshJob(accessTokens);
+      setRefreshJob(data);
       setAccounts(data.items);
       setSelectedIds((prev) => prev.filter((id) => data.items.some((item) => item.access_token === id)));
-      if (data.errors.length > 0) {
-        const firstError = data.errors[0]?.error;
-        toast.error(
-          `刷新成功 ${data.refreshed} 个，失败 ${data.errors.length} 个${firstError ? `，首个错误：${firstError}` : ""}`,
-        );
-      } else {
-        toast.success(`刷新成功 ${data.refreshed} 个账户`);
-      }
+      toast.success(`已开始刷新 ${data.total} 个账号`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "刷新账户失败";
+      const message = error instanceof Error ? error.message : "启动刷新任务失败";
       toast.error(message);
-    } finally {
-      setIsRefreshing(false);
     }
   };
 
@@ -379,6 +437,7 @@ function AccountsPageContent() {
           </Button>
           <AccountImportDialog
             disabled={isLoading || isRefreshing || isDeleting}
+            onRefreshJobStarted={(job) => setRefreshJob(job)}
             onImported={(items) => {
               setAccounts(items);
               setSelectedIds([]);
@@ -468,6 +527,59 @@ function AccountsPageContent() {
           })}
         </div>
       </section>
+
+      {refreshJob ? (
+        <section>
+          <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
+            <CardContent className="space-y-3 p-4">
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex items-center gap-2">
+                  {isRefreshing ? (
+                    <LoaderCircle className="size-4 animate-spin text-blue-500" />
+                  ) : refreshJob.status === "error" ? (
+                    <CircleAlert className="size-4 text-rose-500" />
+                  ) : (
+                    <CheckCircle2 className="size-4 text-emerald-500" />
+                  )}
+                  <span className="text-sm font-medium text-stone-800">
+                    {isRefreshing ? "正在刷新账号信息和额度" : refreshJob.status === "error" ? "刷新任务异常" : "刷新完成"}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-stone-500">
+                  <span>{refreshJob.done}/{refreshJob.total}</span>
+                  <span>成功 {refreshJob.refreshed}</span>
+                  <span>失败 {refreshJob.failed}</span>
+                  {refreshJob.updated_at ? <span>更新于 {refreshJob.updated_at}</span> : null}
+                  {!isRefreshing ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-7 rounded-lg px-2 text-xs text-stone-500 hover:bg-stone-100"
+                      onClick={() => setRefreshJob(null)}
+                    >
+                      收起
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-stone-100">
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-all",
+                    refreshJob.status === "error" ? "bg-rose-500" : "bg-blue-500",
+                  )}
+                  style={{ width: `${refreshProgress}%` }}
+                />
+              </div>
+              {refreshJob.failed > 0 && refreshJob.errors[0]?.error ? (
+                <div className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-700">
+                  首个错误：{refreshJob.errors[0].error}
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        </section>
+      ) : null}
 
       <section className="space-y-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">

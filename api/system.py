@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
-from fastapi import APIRouter, Header, HTTPException, Request
+import json
+
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
 from api.support import require_admin, require_identity, resolve_image_base_url
+from services.auth_service import auth_service
 from services.backup_service import BackupError, backup_service
 from services.config import config
 from services.image_service import delete_images, download_images_zip, get_image_download_response, get_thumbnail_response, list_images
@@ -28,6 +31,11 @@ class ReversePromptInstructionRequest(BaseModel):
     instruction: str = ""
 
 
+class AdminPasswordUpdateRequest(BaseModel):
+    current_key: str = ""
+    new_key: str = ""
+
+
 class ImageDeleteRequest(BaseModel):
     paths: list[str] = []
     start_date: str = ""
@@ -45,6 +53,10 @@ class LogDeleteRequest(BaseModel):
     ids: list[str] = []
 class BackupDeleteRequest(BaseModel):
     key: str = ""
+
+
+class DataTransferRequest(BaseModel):
+    include: dict[str, bool] = {}
 
 
 def create_router(app_version: str) -> APIRouter:
@@ -74,6 +86,24 @@ def create_router(app_version: str) -> APIRouter:
     async def save_settings(body: SettingsUpdateRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
         return {"config": config.update(body.model_dump(mode="python"))}
+
+    @router.post("/api/auth/admin-password")
+    async def update_admin_password(body: AdminPasswordUpdateRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        new_key = str(body.new_key or "").strip()
+        if auth_service.raw_key_exists(new_key):
+            raise HTTPException(status_code=400, detail={"error": "新管理员密码不能和已有用户密钥相同"})
+        try:
+            config.update_admin_auth_key(body.current_key, new_key)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        return {
+            "ok": True,
+            "version": app_version,
+            "role": "admin",
+            "subject_id": "admin",
+            "name": "管理员",
+        }
 
     @router.get("/api/reverse-prompt-instruction")
     async def get_reverse_prompt_instruction(authorization: str | None = Header(default=None)):
@@ -178,6 +208,49 @@ def create_router(app_version: str) -> APIRouter:
             return {"ok": True}
         except BackupError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+
+    @router.post("/api/data/export")
+    async def export_data_endpoint(body: DataTransferRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        try:
+            item = await run_in_threadpool(backup_service.export_data, body.include)
+        except BackupError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        filename = str(item.get("name") or "chatgpt2api-data.tar.gz")
+        quoted = quote(filename)
+        return Response(
+            content=bytes(item.get("payload") or b""),
+            media_type=str(item.get("content_type") or "application/gzip"),
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{quoted}",
+                "Content-Length": str(int(item.get("size") or 0)),
+            },
+        )
+
+    @router.post("/api/data/import")
+    async def import_data_endpoint(
+            include: str = Form(default="{}"),
+            file: UploadFile = File(...),
+            authorization: str | None = Header(default=None),
+    ):
+        require_admin(authorization)
+        try:
+            parsed_include = json.loads(include or "{}")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail={"error": "导入选项格式不正确"}) from exc
+        if not isinstance(parsed_include, dict):
+            raise HTTPException(status_code=400, detail={"error": "导入选项格式不正确"})
+        payload = await file.read()
+        try:
+            result = await run_in_threadpool(
+                backup_service.import_data,
+                payload,
+                parsed_include,
+                filename=str(file.filename or ""),
+            )
+        except BackupError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        return {"ok": True, "result": result}
 
     @router.get("/api/backups/detail")
     async def get_backup_detail(key: str = "", authorization: str | None = Header(default=None)):

@@ -1252,21 +1252,23 @@ function CanvasPageContent({ isAdmin, ownerKey }: { isAdmin: boolean; ownerKey: 
     clearComposerInputs();
     toast.success("已把提示词和结果节点放到画布");
 
-    await Promise.all(
-      imageNodes.map(async (node) => {
-        try {
-          const task = await createImageGenerationTask(node.id, prompt, "gpt-image-2", sizeDraft);
-          await patchImageNode(node.id, taskToImageNode(node, task));
-        } catch (error) {
-          await patchImageNode(node.id, {
-            status: "error",
-            error: error instanceof Error ? error.message : "创建图片任务失败",
-          });
-        }
-      }),
-    );
-    void syncImageTasks();
-    void loadQuota();
+    void (async () => {
+      await Promise.all(
+        imageNodes.map(async (node) => {
+          try {
+            const task = await createImageGenerationTask(node.id, prompt, "gpt-image-2", sizeDraft);
+            await patchImageNode(node.id, taskToImageNode(node, task));
+          } catch (error) {
+            await patchImageNode(node.id, {
+              status: "error",
+              error: error instanceof Error ? error.message : "创建图片任务失败",
+            });
+          }
+        }),
+      );
+      void syncImageTasks();
+      void loadQuota();
+    })();
   }, [clearComposerInputs, countDraft, getCanvasPoint, loadQuota, patchImageNode, persistProject, promptDraft, sizeDraft, syncImageTasks]);
 
   const createEditBranch = useCallback(async () => {
@@ -1401,24 +1403,26 @@ function CanvasPageContent({ isAdmin, ownerKey }: { isAdmin: boolean; ownerKey: 
     clearComposerInputs();
     toast.success(count > 1 ? `已创建 ${count} 张编辑分支` : "已创建编辑分支");
 
-    await Promise.all(
-      resultNodes.map(async (node) => {
-        try {
-          const task =
-            sourceObjects.length === 1
-              ? await createImageEditTaskFromSource(node.id, sourceObjects[0], prompt, "gpt-image-2", sizeDraft)
-              : await createImageEditTaskFromSources(node.id, sourceObjects, prompt, "gpt-image-2", sizeDraft);
-          await patchImageNode(node.id, taskToImageNode(node, task));
-        } catch (error) {
-          await patchImageNode(node.id, {
-            status: "error",
-            error: error instanceof Error ? error.message : "创建编辑任务失败",
-          });
-        }
-      }),
-    );
-    void syncImageTasks();
-    void loadQuota();
+    void (async () => {
+      await Promise.all(
+        resultNodes.map(async (node) => {
+          try {
+            const task =
+              sourceObjects.length === 1
+                ? await createImageEditTaskFromSource(node.id, sourceObjects[0], prompt, "gpt-image-2", sizeDraft)
+                : await createImageEditTaskFromSources(node.id, sourceObjects, prompt, "gpt-image-2", sizeDraft);
+            await patchImageNode(node.id, taskToImageNode(node, task));
+          } catch (error) {
+            await patchImageNode(node.id, {
+              status: "error",
+              error: error instanceof Error ? error.message : "创建编辑任务失败",
+            });
+          }
+        }),
+      );
+      void syncImageTasks();
+      void loadQuota();
+    })();
   }, [clearComposerInputs, countDraft, getCanvasPoint, loadQuota, patchImageNode, persistProject, promptDraft, referenceImages, sizeDraft, successfulSelectedImage, syncImageTasks]);
 
   const copySelectedEditNodeRevision = useCallback(async () => {
@@ -1537,24 +1541,26 @@ function CanvasPageContent({ isAdmin, ownerKey }: { isAdmin: boolean; ownerKey: 
     clearComposerInputs();
     toast.success(count > 1 ? `已复制编辑节点并生成 ${count} 张新结果` : "已复制编辑节点并生成新结果");
 
-    await Promise.all(
-      resultNodes.map(async (node) => {
-        try {
-          const task =
-            sourceObjects.length === 1
-              ? await createImageEditTaskFromSource(node.id, sourceObjects[0], prompt, "gpt-image-2", sizeDraft)
-              : await createImageEditTaskFromSources(node.id, sourceObjects, prompt, "gpt-image-2", sizeDraft);
-          await patchImageNode(node.id, taskToImageNode(node, task));
-        } catch (error) {
-          await patchImageNode(node.id, {
-            status: "error",
-            error: error instanceof Error ? error.message : "创建编辑任务失败",
-          });
-        }
-      }),
-    );
-    void syncImageTasks();
-    void loadQuota();
+    void (async () => {
+      await Promise.all(
+        resultNodes.map(async (node) => {
+          try {
+            const task =
+              sourceObjects.length === 1
+                ? await createImageEditTaskFromSource(node.id, sourceObjects[0], prompt, "gpt-image-2", sizeDraft)
+                : await createImageEditTaskFromSources(node.id, sourceObjects, prompt, "gpt-image-2", sizeDraft);
+            await patchImageNode(node.id, taskToImageNode(node, task));
+          } catch (error) {
+            await patchImageNode(node.id, {
+              status: "error",
+              error: error instanceof Error ? error.message : "创建编辑任务失败",
+            });
+          }
+        }),
+      );
+      void syncImageTasks();
+      void loadQuota();
+    })();
   }, [clearComposerInputs, countDraft, loadQuota, patchImageNode, persistProject, promptDraft, referenceImages, selectedEditNode, sizeDraft, syncImageTasks]);
 
   const handleComposerSubmit = useCallback(async () => {
@@ -1942,8 +1948,8 @@ function CanvasPageContent({ isAdmin, ownerKey }: { isAdmin: boolean; ownerKey: 
 
   return (
     <>
-    <section className="mx-auto grid h-[calc(100dvh-5.5rem)] min-h-0 w-full max-w-[1700px] grid-cols-1 overflow-hidden px-2 pb-3 sm:h-[calc(100dvh-4rem)] sm:px-4 lg:grid-cols-[260px_minmax(0,1fr)_320px] lg:gap-3">
-      <aside className="hidden min-h-0 flex-col overflow-hidden border-r border-stone-200/70 pr-3 lg:flex">
+    <section className="mx-auto grid h-[calc(100dvh-5.5rem)] min-h-0 w-full max-w-[1700px] grid-cols-1 overflow-hidden px-2 pb-3 sm:h-[calc(100dvh-4rem)] sm:px-4 xl:grid-cols-[260px_minmax(0,1fr)_320px] xl:gap-3">
+      <aside className="hidden min-h-0 flex-col overflow-hidden border-r border-stone-200/70 pr-3 xl:flex">
         <div className="flex items-center justify-between gap-2 py-3">
           <div>
             <h1 className="text-base font-semibold tracking-tight text-stone-950">画布创作</h1>
@@ -2158,9 +2164,9 @@ function CanvasPageContent({ isAdmin, ownerKey }: { isAdmin: boolean; ownerKey: 
         </div>
       </aside>
 
-      <main className="relative min-h-0 overflow-hidden rounded-[24px] border border-stone-200 bg-[#f7f6f2]">
-        <div className="pointer-events-none absolute inset-0 opacity-80 [background-image:linear-gradient(rgba(68,64,60,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(68,64,60,0.08)_1px,transparent_1px)] [background-size:28px_28px]" />
-        <div className="absolute left-3 top-3 z-20 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center gap-2">
+      <main className="relative isolate min-h-0 overflow-hidden rounded-[24px] border border-stone-200 bg-[#f7f6f2]">
+        <div className="pointer-events-none absolute inset-0 z-0 opacity-80 [background-image:linear-gradient(rgba(68,64,60,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(68,64,60,0.08)_1px,transparent_1px)] [background-size:28px_28px]" />
+        <div className="absolute left-3 top-3 z-40 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center gap-2">
           <div className="rounded-full border border-stone-200 bg-white/95 px-3 py-2 text-xs font-medium text-stone-600 shadow-sm">
             {saveState === "saving" ? "保存中" : "已自动保存"} · {runningCount} 个任务处理中
           </div>
@@ -2188,7 +2194,7 @@ function CanvasPageContent({ isAdmin, ownerKey }: { isAdmin: boolean; ownerKey: 
           </Button>
         </div>
 
-        <div className="pointer-events-auto absolute inset-x-3 bottom-3 z-20">
+        <div className="pointer-events-auto absolute inset-x-3 bottom-3 z-50">
           {selectedEditNode ? (
             <div className="mx-auto mb-2 flex w-[min(980px,100%)] items-center justify-between gap-2 rounded-2xl border border-amber-200 bg-amber-50/95 px-3 py-2 text-xs text-amber-800 shadow-sm">
               <span className="min-w-0 truncate">正在复制这个编辑要求节点，会保留它的上游图片并在副本下方生成新结果</span>
@@ -2241,7 +2247,7 @@ function CanvasPageContent({ isAdmin, ownerKey }: { isAdmin: boolean; ownerKey: 
 
         <div
           ref={canvasRef}
-          className="absolute inset-0 cursor-grab overflow-hidden active:cursor-grabbing"
+          className="absolute inset-0 z-10 cursor-grab overflow-hidden active:cursor-grabbing"
           onWheel={handleWheel}
           onPointerDown={handleCanvasPointerDown}
           onPointerMove={handlePointerMove}
@@ -2434,7 +2440,7 @@ function CanvasPageContent({ isAdmin, ownerKey }: { isAdmin: boolean; ownerKey: 
         </div>
       </main>
 
-      <aside className="hidden min-h-0 flex-col overflow-hidden border-l border-stone-200/70 pl-3 lg:flex">
+      <aside className="hidden min-h-0 flex-col overflow-hidden border-l border-stone-200/70 pl-3 xl:flex">
         <div className="border-b border-stone-200/70 py-3">
           <Input
             value={activeProject.title}

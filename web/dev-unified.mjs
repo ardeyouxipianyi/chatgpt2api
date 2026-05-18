@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 
 const publicPort = Number(process.env.CHATGPT2API_PUBLIC_PORT || 3000);
 const nextPort = Number(process.env.CHATGPT2API_NEXT_PORT || 3001);
+const publicHost = process.env.CHATGPT2API_PUBLIC_HOST || "0.0.0.0";
+const nextHost = process.env.CHATGPT2API_NEXT_HOST || "127.0.0.1";
 const backendOrigin = new URL(process.env.CHATGPT2API_BACKEND_URL || "http://127.0.0.1:8000");
 const webDir = dirname(fileURLToPath(import.meta.url));
 const apiPrefixes = ["/v1/", "/api/", "/auth/", "/images/", "/image-thumbnails/"];
@@ -76,7 +78,7 @@ function proxyUpgrade(req, socket, head, target) {
 
 const next = spawn(
   "npx",
-  ["next", "dev", "--webpack", "-H", "0.0.0.0", "-p", String(nextPort)],
+  ["next", "dev", "--webpack", "-H", nextHost, "-p", String(nextPort)],
   {
     cwd: webDir,
     stdio: "inherit",
@@ -95,19 +97,19 @@ const server = http.createServer((req, res) => {
     proxyHttp(req, res, backendOrigin);
     return;
   }
-  proxyHttp(req, res, new URL(`http://127.0.0.1:${nextPort}`));
+  proxyHttp(req, res, new URL(`http://${nextHost}:${nextPort}`));
 });
 
 server.on("upgrade", (req, socket, head) => {
-  proxyUpgrade(req, socket, head, new URL(`http://127.0.0.1:${nextPort}`));
+  proxyUpgrade(req, socket, head, new URL(`http://${nextHost}:${nextPort}`));
 });
 
 server.timeout = 0;
 server.keepAliveTimeout = 0;
 server.headersTimeout = 0;
 
-server.listen(publicPort, "0.0.0.0", () => {
-  console.log(`[unified] http://0.0.0.0:${publicPort} -> web:${nextPort}, api:${backendOrigin.origin}`);
+server.listen(publicPort, publicHost, () => {
+  console.log(`[unified] http://${publicHost}:${publicPort} -> web:${nextHost}:${nextPort}, api:${backendOrigin.origin}`);
 });
 
 function shutdown() {

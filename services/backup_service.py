@@ -120,6 +120,30 @@ def _json_bytes(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=False, indent=2).encode("utf-8")
 
 
+def _json_object_from_bytes(value: bytes) -> object:
+    try:
+        return json.loads(value.decode("utf-8"))
+    except Exception as exc:
+        raise BackupError("导入包内 JSON 数据无法解析") from exc
+
+
+def _normalize_transfer_include(value: object) -> dict[str, bool]:
+    source = value if isinstance(value, dict) else {}
+    keys = (
+        "config",
+        "register",
+        "cpa",
+        "sub2api",
+        "logs",
+        "image_tasks",
+        "image_canvas",
+        "accounts_snapshot",
+        "auth_keys_snapshot",
+        "images",
+    )
+    return {key: bool(source.get(key)) for key in keys}
+
+
 def _count_items(value: object) -> int:
     if isinstance(value, list):
         return len(value)
@@ -449,6 +473,121 @@ class BackupService:
             "size": len(payload),
         }
 
+    def export_data(self, include: dict[str, object]) -> dict[str, object]:
+        normalized_include = _normalize_transfer_include(include)
+        payload = self._build_backup_archive({"include": normalized_include}, trigger="manual-export")
+        timestamp = _utc_now().strftime("%Y%m%dT%H%M%SZ")
+        name = f"chatgpt2api-data-{timestamp}.tar.gz"
+        return {
+            "name": name,
+            "content_type": "application/gzip",
+            "payload": payload,
+            "size": len(payload),
+        }
+
+    def import_data(self, payload: bytes, include: dict[str, object], *, filename: str = "") -> dict[str, object]:
+        if not payload:
+            raise BackupError("导入文件不能为空")
+        if _clean(filename).endswith(".enc"):
+            raise BackupError("当前手动导入不支持加密备份包，请先解密后再导入")
+        selected = _normalize_transfer_include(include)
+        members = self._read_archive_members(payload)
+        summary: dict[str, object] = {"imported": [], "skipped": [], "counts": {}}
+
+        def mark(name: str, count: int = 1) -> None:
+            imported = summary.setdefault("imported", [])
+            if isinstance(imported, list) and name not in imported:
+                imported.append(name)
+            counts = summary.setdefault("counts", {})
+            if isinstance(counts, dict):
+                counts[name] = int(counts.get(name) or 0) + count
+
+        def skip(name: str) -> None:
+            skipped = summary.setdefault("skipped", [])
+            if isinstance(skipped, list) and name not in skipped:
+                skipped.append(name)
+
+        if selected.get("config"):
+            raw = members.get("config.json")
+            if raw is None:
+                skip("config")
+            else:
+                CONFIG_FILE.write_bytes(raw)
+                config.data = config._load()
+                mark("config")
+
+        file_targets = {
+            "register": (DATA_DIR / "register.json", "data/register.json"),
+            "cpa": (DATA_DIR / "cpa_config.json", "data/cpa_config.json"),
+            "sub2api": (DATA_DIR / "sub2api_config.json", "data/sub2api_config.json"),
+            "logs": (DATA_DIR / "logs.jsonl", "data/logs.jsonl"),
+            "image_tasks": (DATA_DIR / "image_tasks.json", "data/image_tasks.json"),
+            "image_canvas": (DATA_DIR / "image_canvas_projects.json", "data/image_canvas_projects.json"),
+        }
+        for key, (target, archive_name) in file_targets.items():
+            if not selected.get(key):
+                continue
+            raw = members.get(archive_name)
+            if raw is None:
+                skip(key)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(raw)
+            mark(key)
+
+        if selected.get("accounts_snapshot"):
+            raw = members.get("snapshots/accounts.json")
+            if raw is None:
+                skip("accounts_snapshot")
+            else:
+                parsed = _json_object_from_bytes(raw)
+                if not isinstance(parsed, list):
+                    raise BackupError("账号快照格式不正确")
+                from services.account_service import account_service
+                mark("accounts_snapshot", account_service.replace_accounts(parsed))
+
+        if selected.get("auth_keys_snapshot"):
+            raw = members.get("snapshots/auth_keys.json")
+            if raw is None:
+                skip("auth_keys_snapshot")
+            else:
+                parsed = _json_object_from_bytes(raw)
+                if isinstance(parsed, dict):
+                    parsed = parsed.get("items")
+                if not isinstance(parsed, list):
+                    raise BackupError("用户密钥快照格式不正确")
+                from services.auth_service import auth_service
+                mark("auth_keys_snapshot", auth_service.replace_keys(parsed))
+
+        if selected.get("images"):
+            image_count = 0
+            for name, raw in members.items():
+                if name == "data/image_tags.json":
+                    TAGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+                    TAGS_FILE.write_bytes(raw)
+                    mark("image_tags")
+                    continue
+                prefix = "data/images/"
+                if not name.startswith(prefix):
+                    continue
+                rel = name.removeprefix(prefix).strip("/")
+                if not rel:
+                    continue
+                target = (config.images_dir / rel).resolve()
+                try:
+                    target.relative_to(config.images_dir.resolve())
+                except ValueError as exc:
+                    raise BackupError("导入包包含不安全的图片路径") from exc
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(raw)
+                image_count += 1
+            if image_count:
+                mark("images", image_count)
+            else:
+                skip("images")
+
+        return summary
+
     def get_backup_detail(self, key: str) -> dict[str, object]:
         candidate = _clean(key)
         if not candidate:
@@ -543,6 +682,24 @@ class BackupService:
             decoded = _openssl_decrypt(decoded, passphrase)
         return self._decode_archive_detail(decoded)
 
+    def _read_archive_members(self, payload: bytes) -> dict[str, bytes]:
+        members: dict[str, bytes] = {}
+        try:
+            with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+                for member in archive.getmembers():
+                    if not member.isfile():
+                        continue
+                    name = str(member.name or "").replace("\\", "/").lstrip("/")
+                    if not name or ".." in Path(name).parts:
+                        raise BackupError("导入包包含不安全的文件路径")
+                    extracted = archive.extractfile(member)
+                    if extracted is None:
+                        continue
+                    members[name] = extracted.read()
+        except tarfile.TarError as exc:
+            raise BackupError("解析导入压缩包失败，文件可能已损坏") from exc
+        return members
+
     def _apply_rotation(self, client: CloudflareR2Client, keep: int) -> None:
         if keep <= 0:
             return
@@ -631,6 +788,8 @@ class BackupService:
                 self._add_file_to_archive(archive, DATA_DIR / "logs.jsonl", "data/logs.jsonl")
             if include.get("image_tasks"):
                 self._add_file_to_archive(archive, DATA_DIR / "image_tasks.json", "data/image_tasks.json")
+            if include.get("image_canvas"):
+                self._add_file_to_archive(archive, DATA_DIR / "image_canvas_projects.json", "data/image_canvas_projects.json")
             if include.get("accounts_snapshot"):
                 self._add_bytes_to_archive(
                     archive,

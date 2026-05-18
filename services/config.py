@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hmac
 import json
 import os
 import sys
@@ -22,6 +23,7 @@ DEFAULT_BACKUP_INCLUDE = {
     "sub2api": True,
     "logs": True,
     "image_tasks": True,
+    "image_canvas": True,
     "accounts_snapshot": True,
     "auth_keys_snapshot": True,
     "images": False,
@@ -168,6 +170,14 @@ class ConfigStore:
         return _normalize_auth_key(os.getenv("CHATGPT2API_AUTH_KEY") or self.data.get("auth-key"))
 
     @property
+    def auth_key_from_env(self) -> bool:
+        return bool(_normalize_auth_key(os.getenv("CHATGPT2API_AUTH_KEY")))
+
+    @property
+    def admin_auth_key_editable(self) -> bool:
+        return not self.auth_key_from_env
+
+    @property
     def accounts_file(self) -> Path:
         return DATA_DIR / "accounts.json"
 
@@ -193,11 +203,46 @@ class ConfigStore:
             return 120
 
     @property
+    def image_unaccepted_task_timeout_secs(self) -> int:
+        try:
+            return max(1, int(self.data.get("image_unaccepted_task_timeout_secs", 20)))
+        except (TypeError, ValueError):
+            return 20
+
+    @property
+    def image_stalled_result_timeout_secs(self) -> int:
+        try:
+            return max(1, int(self.data.get("image_stalled_result_timeout_secs", 60)))
+        except (TypeError, ValueError):
+            return 60
+
+    @property
     def image_account_concurrency(self) -> int:
         try:
             return max(1, int(self.data.get("image_account_concurrency", 3)))
         except (TypeError, ValueError):
             return 3
+
+    @property
+    def image_pool_failover_enabled(self) -> bool:
+        value = self.data.get("image_pool_failover_enabled", True)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @property
+    def image_pool_max_attempts(self) -> int:
+        try:
+            return max(1, int(self.data.get("image_pool_max_attempts", 3)))
+        except (TypeError, ValueError):
+            return 3
+
+    @property
+    def image_account_failure_cooldown_secs(self) -> int:
+        try:
+            return max(0, int(self.data.get("image_account_failure_cooldown_secs", 60)))
+        except (TypeError, ValueError):
+            return 60
 
     @property
     def image_empty_result_retry_enabled(self) -> bool:
@@ -293,7 +338,12 @@ class ConfigStore:
         data["refresh_account_interval_minute"] = self.refresh_account_interval_minute
         data["image_retention_days"] = self.image_retention_days
         data["image_poll_timeout_secs"] = self.image_poll_timeout_secs
+        data["image_unaccepted_task_timeout_secs"] = self.image_unaccepted_task_timeout_secs
+        data["image_stalled_result_timeout_secs"] = self.image_stalled_result_timeout_secs
         data["image_account_concurrency"] = self.image_account_concurrency
+        data["image_pool_failover_enabled"] = self.image_pool_failover_enabled
+        data["image_pool_max_attempts"] = self.image_pool_max_attempts
+        data["image_account_failure_cooldown_secs"] = self.image_account_failure_cooldown_secs
         data["image_empty_result_retry_enabled"] = self.image_empty_result_retry_enabled
         data["auto_remove_invalid_accounts"] = self.auto_remove_invalid_accounts
         data["auto_remove_rate_limited_accounts"] = self.auto_remove_rate_limited_accounts
@@ -302,6 +352,7 @@ class ConfigStore:
         data["ai_review"] = self.ai_review
         data["global_system_prompt"] = self.global_system_prompt
         data["reverse_prompt_instruction"] = self.reverse_prompt_instruction
+        data["admin_auth_key_editable"] = self.admin_auth_key_editable
         data["backup"] = self.get_backup_settings()
         data.pop("auth-key", None)
         return data
@@ -310,11 +361,36 @@ class ConfigStore:
         return str(self.data.get("proxy") or "").strip()
 
     def update(self, data: dict[str, object]) -> dict[str, object]:
+        updates = dict(data or {})
+        updates.pop("auth-key", None)
+        updates.pop("admin_auth_key_editable", None)
         next_data = dict(self.data)
-        next_data.update(dict(data or {}))
+        next_data.update(updates)
         if "backup" in next_data:
             next_data["backup"] = _normalize_backup_settings(next_data.get("backup"))
         next_data.pop("backup_state", None)
+        self.data = next_data
+        self._save()
+        return self.get()
+
+    def update_admin_auth_key(self, current_key: str, new_key: str) -> dict[str, object]:
+        if self.auth_key_from_env:
+            raise ValueError("当前管理员密码由启动环境固定，不能在网页里修改")
+        current = _normalize_auth_key(current_key)
+        new_value = _normalize_auth_key(new_key)
+        existing = self.auth_key
+        if not current:
+            raise ValueError("请输入当前管理员密码")
+        if not new_value:
+            raise ValueError("请输入新的管理员密码")
+        if len(new_value) < 6:
+            raise ValueError("新的管理员密码至少需要 6 个字符")
+        if not existing or not hmac.compare_digest(current, existing):
+            raise ValueError("当前管理员密码不正确")
+        if hmac.compare_digest(current, new_value):
+            raise ValueError("新密码不能和当前密码相同")
+        next_data = dict(self.data)
+        next_data["auth-key"] = new_value
         self.data = next_data
         self._save()
         return self.get()
