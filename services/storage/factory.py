@@ -5,7 +5,6 @@ from pathlib import Path
 
 from services.storage.base import StorageBackend
 from services.storage.database_storage import DatabaseStorageBackend
-from services.storage.git_storage import GitStorageBackend
 from services.storage.json_storage import JSONStorageBackend
 
 
@@ -47,6 +46,15 @@ def create_storage_backend(data_dir: Path) -> StorageBackend:
     
     elif backend_type == "git":
         # Git 仓库存储
+        try:
+            from services.storage.git_storage import GitStorageBackend
+        except ImportError as exc:
+            raise RuntimeError(
+                "Git storage backend requires GitPython and a usable git.exe. "
+                "Install Git for Windows and make sure git.exe is in PATH, "
+                "or use the default STORAGE_BACKEND=json."
+            ) from exc
+
         repo_url = os.getenv("GIT_REPO_URL", "").strip()
         token = os.getenv("GIT_TOKEN", "").strip()
         branch = os.getenv("GIT_BRANCH", "main").strip()

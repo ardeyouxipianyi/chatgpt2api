@@ -116,7 +116,7 @@ def _read_json_object(path: Path, *, name: str) -> dict[str, object]:
         )
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
