@@ -112,6 +112,7 @@ $portableConfigJson = @'
       "sub2api": true,
       "logs": true,
       "image_tasks": true,
+      "image_conversations": true,
       "image_canvas": true,
       "accounts_snapshot": true,
       "auth_keys_snapshot": true,
