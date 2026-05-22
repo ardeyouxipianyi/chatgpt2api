@@ -23,6 +23,7 @@ DEFAULT_BACKUP_INCLUDE = {
     "sub2api": True,
     "logs": True,
     "image_tasks": True,
+    "image_conversations": True,
     "image_canvas": True,
     "accounts_snapshot": True,
     "auth_keys_snapshot": True,

@@ -13,6 +13,7 @@ import { importDataPackage, type BackupInclude } from "@/lib/api";
 import { getStoredAuthKey } from "@/store/auth";
 
 const transferItems: Array<{ key: keyof BackupInclude; label: string; note: string }> = [
+  { key: "image_conversations", label: "Image conversations", note: "Image page conversation history" },
   { key: "config", label: "系统配置", note: "基础设置、管理员密码等" },
   { key: "accounts_snapshot", label: "账号池", note: "所有账号与额度状态" },
   { key: "auth_keys_snapshot", label: "用户密钥", note: "普通用户访问密钥" },
@@ -32,6 +33,7 @@ const defaultInclude: BackupInclude = {
   sub2api: true,
   logs: true,
   image_tasks: true,
+  image_conversations: true,
   image_canvas: true,
   accounts_snapshot: true,
   auth_keys_snapshot: true,

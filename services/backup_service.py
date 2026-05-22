@@ -136,6 +136,7 @@ def _normalize_transfer_include(value: object) -> dict[str, bool]:
         "sub2api",
         "logs",
         "image_tasks",
+        "image_conversations",
         "image_canvas",
         "accounts_snapshot",
         "auth_keys_snapshot",
@@ -522,6 +523,7 @@ class BackupService:
             "sub2api": (DATA_DIR / "sub2api_config.json", "data/sub2api_config.json"),
             "logs": (DATA_DIR / "logs.jsonl", "data/logs.jsonl"),
             "image_tasks": (DATA_DIR / "image_tasks.json", "data/image_tasks.json"),
+            "image_conversations": (DATA_DIR / "image_conversations.json", "data/image_conversations.json"),
             "image_canvas": (DATA_DIR / "image_canvas_projects.json", "data/image_canvas_projects.json"),
         }
         for key, (target, archive_name) in file_targets.items():
@@ -533,6 +535,9 @@ class BackupService:
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(raw)
+            if key == "image_conversations":
+                from services.image_conversation_service import image_conversation_service
+                image_conversation_service.reload()
             mark(key)
 
         if selected.get("accounts_snapshot"):
@@ -788,6 +793,8 @@ class BackupService:
                 self._add_file_to_archive(archive, DATA_DIR / "logs.jsonl", "data/logs.jsonl")
             if include.get("image_tasks"):
                 self._add_file_to_archive(archive, DATA_DIR / "image_tasks.json", "data/image_tasks.json")
+            if include.get("image_conversations"):
+                self._add_file_to_archive(archive, DATA_DIR / "image_conversations.json", "data/image_conversations.json")
             if include.get("image_canvas"):
                 self._add_file_to_archive(archive, DATA_DIR / "image_canvas_projects.json", "data/image_canvas_projects.json")
             if include.get("accounts_snapshot"):
